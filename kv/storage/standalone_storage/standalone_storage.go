@@ -81,6 +81,7 @@ func (s *StandAloneStorage) Reader(ctx *kvrpcpb.Context) (storage.StorageReader,
 type TxnStorageReader struct {
 	txn *badger.Txn
 }
+
 func (r *StandAloneReader) GetCF(cf string, key []byte) ([]byte, error) {
 	/*
 		receiver 	StandAloneStorage = engine
