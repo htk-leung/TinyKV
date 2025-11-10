@@ -1,7 +1,11 @@
 package server
 
 import (
-	"context"
+	"context" // go package
+
+	"github.com/Connor1996/badger"
+	"github.com/pingcap-incubator/tinykv/kv/storage"
+	"github.com/pingcap/errors"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
 )
 
@@ -9,12 +13,12 @@ import (
 // Some helper methods can be found in sever.go in the current directory
 
 var (
-	ErrEmptyReqCF := errors.New("Missing CF in request")
-	ErrEmptyReqKey := errors.New("Missing Key in request")
-	ErrEmptyReqVal := errors.New("Missing Val in request")
-	ErrEmptyReqStartKey := errors.New("Missing StartKey in request")
-	ErrEmptyReqLimit := errors.New("Missing iteration limit in request")
-	ErrEmptyReqContext := errors.New("Missing context in request")
+	ErrEmptyReqCF = errors.New("Missing CF in request")
+	ErrEmptyReqKey = errors.New("Missing Key in request")
+	ErrEmptyReqVal = errors.New("Missing Val in request")
+	ErrEmptyReqStartKey = errors.New("Missing StartKey in request")
+	ErrEmptyReqLimit = errors.New("Missing iteration limit in request")
+	ErrEmptyReqContext = errors.New("Missing context in request")
 )
 
 // RawGet return the corresponding Get response based on RawGetRequest's CF and Key fields
@@ -25,13 +29,16 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
 	resp := &kvrpcpb.RawGetResponse{}
 
 	// get vars
-	if reqContext := req.GetContext(); reqContext == nil {
+	reqContext := req.GetContext()
+	if reqContext == nil {
 		return resp, ErrEmptyReqContext
 	}
-	if reqCF := req.GetCF(); reqCF == nil {
+	reqCF := req.GetCf()
+	if reqCF == "" {
 		return resp, ErrEmptyReqCF
 	}
-	if reqKey := req.GetKey(); reqKey == nil {
+	reqKey := req.GetKey()
+	if reqKey == nil {
 		return resp, ErrEmptyReqKey
 	}
     
@@ -40,10 +47,11 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
     defer reader.Close() // delay discarding txn
     
 	// get value and error
-	resp.Value, resp.Error = reader.GetCF(reqCF, reqKey)
+	resp.Value, err = reader.GetCF(reqCF, reqKey)
 
 	// if not found set bool
-	if resp.Error == badger.ErrKeyNotFound {
+	if err == badger.ErrKeyNotFound {
+		resp.Error = err.Error()
         resp.NotFound = true
 	}
 
@@ -58,16 +66,20 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 	resp := &kvrpcpb.RawPutResponse{}
 
 	// get vars
-	if reqContext := req.GetContext(); reqContext == nil {
+	reqContext := req.GetContext()
+	if reqContext == nil {
 		return resp, ErrEmptyReqContext
 	}
-	if reqCF := req.GetCF(); reqCF == nil {
+	reqCF := req.GetCf()
+	if reqCF == "" {
 		return resp, ErrEmptyReqCF
 	}
-	if reqKey := req.GetKey(); reqKey == nil {
+	reqKey := req.GetKey()
+	if reqKey == nil {
 		return resp, ErrEmptyReqKey
 	}
-	if reqVal := req.GetValue(); reqVal == nil {
+	reqVal := req.GetValue()
+	if reqVal == nil {
 		return resp, ErrEmptyReqVal
 	}
 
@@ -79,15 +91,19 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 				Key:	reqKey,
 				Value:	reqVal,
 			},
-		}
+		},
 	}
 
 	// acquire latch
-	keys = [][]byte{reqKey}
+	keys := [][]byte{reqKey}
 	server.Latches.WaitForLatches(keys)
 
 	// write to storage
-	resp.err = server.storage.Write(reqContext, batch)
+	err := server.storage.Write(reqContext, batch)
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	 
 
 	// release latch
 	server.Latches.ReleaseLatches(keys)
@@ -105,13 +121,16 @@ func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest
 	resp := &kvrpcpb.RawDeleteResponse{}
 
 	// get vars
-	if reqContext := req.GetContext(); reqContext == nil {
+	reqContext := req.GetContext()
+	if reqContext == nil {
 		return resp, ErrEmptyReqContext
 	}
-	if reqCF := req.GetCF(); reqCF == nil {
+	reqCF := req.GetCf()
+	if reqCF == "" {
 		return resp, ErrEmptyReqCF
 	}
-	if reqKey := req.GetKey(); reqKey == nil {
+	reqKey := req.GetKey()
+	if reqKey == nil {
 		return resp, ErrEmptyReqKey
 	}
 
@@ -122,15 +141,18 @@ func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest
 				Cf:		reqCF,
 				Key:	reqKey,
 			},
-		}
+		},
 	}
 
 	// acquire latch
-	keys = [][]byte{reqKey}
+	keys := [][]byte{reqKey}
 	server.Latches.WaitForLatches(keys)
 
 	// write to storage
-	resp.err = server.storage.Write(reqContext, batch)
+	err := server.storage.Write(reqContext, batch)
+	if err != nil {
+		resp.Error = err.Error()
+	}
 
 	// release latch
 	server.Latches.ReleaseLatches(keys)
@@ -148,42 +170,53 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 	resp := &kvrpcpb.RawScanResponse{}
 
 	// get vars
-	if reqContext := req.GetContext(); reqContext == nil {
+	reqContext := req.GetContext()
+	if reqContext == nil {
 		return resp, ErrEmptyReqContext
 	}
-	if reqSK := req.GetStartKey(); reqSK == nil {
+	reqSK := req.GetStartKey()
+	if reqSK == nil {
 		return resp, ErrEmptyReqStartKey
 	}
-	if reqLimit := req.GetLimit(); reqLimit == nil {
+	reqLimit := req.GetLimit()
+	if reqLimit == 0 {
 		return resp, ErrEmptyReqLimit
 	}
-	if reqCF := req.GetCF(); reqCF == nil {
+	reqCF := req.GetCf()
+	if reqCF == "" {
 		return resp, ErrEmptyReqCF
 	}
 
 	// get reader
-	reader, err := serer.storage.Reader(reqContext)
+	reader, _ := server.storage.Reader(reqContext)
 	defer reader.Close()
 
 	// get it
 	it := reader.IterCF(reqCF)
+	defer it.Close()
 
 	// scan
-	pair := make([]kvPair, reqLimit)
+	pairs := make([]*kvrpcpb.KvPair, 0, reqLimit)
 	it.Seek(reqSK)
 
-	for i := 0; i < reqLimit; i++ {
-		it.Next()
-		item := it.Item()
+	for i := uint32(0); i < reqLimit; i++ {
+		// it.Next()
+		// if !it.Valid() {
+		// 	break
+		// }
 
-		pair[i] = kvPair {
-			keyError:	item.err,
-			Key:		item.KeyCopy(),
-			Value:		item.ValueCopy(),
-		}
+		item := it.Item()
+		val, _ := item.ValueCopy(nil)
+		key := item.KeyCopy(nil)
+	
+		pairs = append(pairs, &kvrpcpb.KvPair {
+			Key:		key,
+			Value:		val,
+		})
+
+		it.Next()
 	}
 
-	resp.Kvs = pair
-
-	return nil, nil
+	resp.Kvs = pairs
+	return resp, nil
 }
