@@ -5,20 +5,20 @@ import (
 
 	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/storage"
-	"github.com/pingcap/errors"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
+	"github.com/pingcap/errors"
 )
 
 // The functions below are Server's Raw API. (implements TinyKvServer).
 // Some helper methods can be found in sever.go in the current directory
 
 var (
-	ErrEmptyReqCF = errors.New("Missing CF in request")
-	ErrEmptyReqKey = errors.New("Missing Key in request")
-	ErrEmptyReqVal = errors.New("Missing Val in request")
+	ErrEmptyReqCF       = errors.New("Missing CF in request")
+	ErrEmptyReqKey      = errors.New("Missing Key in request")
+	ErrEmptyReqVal      = errors.New("Missing Val in request")
 	ErrEmptyReqStartKey = errors.New("Missing StartKey in request")
-	ErrEmptyReqLimit = errors.New("Missing iteration limit in request")
-	ErrEmptyReqContext = errors.New("Missing context in request")
+	ErrEmptyReqLimit    = errors.New("Missing iteration limit in request")
+	ErrEmptyReqContext  = errors.New("Missing context in request")
 )
 
 // RawGet return the corresponding Get response based on RawGetRequest's CF and Key fields
@@ -41,18 +41,18 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
 	if reqKey == nil {
 		return resp, ErrEmptyReqKey
 	}
-    
-    // get reader
-    reader, err := server.storage.Reader(reqContext) 
-    defer reader.Close() // delay discarding txn
-    
+
+	// get reader
+	reader, err := server.storage.Reader(reqContext)
+	defer reader.Close() // delay discarding txn
+
 	// get value and error
 	resp.Value, err = reader.GetCF(reqCF, reqKey)
 
 	// if not found set bool
 	if err == badger.ErrKeyNotFound {
 		resp.Error = err.Error()
-        resp.NotFound = true
+		resp.NotFound = true
 	}
 
 	return resp, nil
@@ -84,12 +84,12 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 	}
 
 	// create batch
-	batch := []storage.Modify {
+	batch := []storage.Modify{
 		{
-			Data: storage.Put {
-				Cf:		reqCF,
-				Key:	reqKey,
-				Value:	reqVal,
+			Data: storage.Put{
+				Cf:    reqCF,
+				Key:   reqKey,
+				Value: reqVal,
 			},
 		},
 	}
@@ -103,7 +103,6 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 	if err != nil {
 		resp.Error = err.Error()
 	}
-	 
 
 	// release latch
 	server.Latches.ReleaseLatches(keys)
@@ -135,11 +134,11 @@ func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest
 	}
 
 	// create batch
-	batch := []storage.Modify {
+	batch := []storage.Modify{
 		{
-			Data: storage.Delete {
-				Cf:		reqCF,
-				Key:	reqKey,
+			Data: storage.Delete{
+				Cf:  reqCF,
+				Key: reqKey,
 			},
 		},
 	}
@@ -208,10 +207,10 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		item := it.Item()
 		val, _ := item.ValueCopy(nil)
 		key := item.KeyCopy(nil)
-	
-		pairs = append(pairs, &kvrpcpb.KvPair {
-			Key:		key,
-			Value:		val,
+
+		pairs = append(pairs, &kvrpcpb.KvPair{
+			Key:   key,
+			Value: val,
 		})
 
 		it.Next()

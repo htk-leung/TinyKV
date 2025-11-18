@@ -5,8 +5,9 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/Connor1996/badger v1.5.1-0.20200306031920-9bbcbd8ba570/go.mod h1:eDy3lZfjgEs4EC8pePI7y/Qx509ylx/S94y/dimtkxc=
 github.com/Connor1996/badger v1.5.1-0.20220222053432-2d2cbf472c77 h1:9wys07NWIZESExLQK8DFuaOsky842KZlQAM/mCNhAp0=
 github.com/Connor1996/badger v1.5.1-0.20220222053432-2d2cbf472c77/go.mod h1:GnSYrIcuBMzgVM5wYQrQOh5OH6nFHVAAUfUmfqTetzU=
-github.com/DataDog/zstd v1.4.1 h1:3oxKN3wbHibqx897utPC2LTQU4J+IHWWJO+glkAkpFM=
 github.com/DataDog/zstd v1.4.1/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
+github.com/DataDog/zstd v1.5.7 h1:ybO8RBeh29qrxIhCA9E8gKY6xfONU9T6G6aP9DTKfLE=
+github.com/DataDog/zstd v1.5.7/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d/go.mod h1:3eOhrUMpNV+6aFIbp5/iudMxNCF27Vw2OZgy4xEx0Fg=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=

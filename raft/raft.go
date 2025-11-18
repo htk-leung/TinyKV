@@ -164,15 +164,44 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
+
 	// Your Code Here (2A).
-	return nil
+	return &Raft{
+		id:					c.ID,
+		RaftLog: 			&RaftLog {
+			storage:	c.Storage,
+			applied:	c.Applied,
+		},
+		State:				StateFollower,
+		heartbeatTimeout:	c.HeartbeatTick,
+		electionTimeout:	c.ElectionTick,
+	}
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	return false
+
+	// from doc.go
+	// If you need to send out a message, just push it to raft.Raft.msgs and 
+	// all messages the raft received will be passed to raft.Raft.Step()
+
+	// check to val exists
+	_, ok := r.Prs[to]
+	if !ok {
+		return false
+	}
+
+	// append to msg
+	r.msgs = append(r.msgs, pb.Message {
+		MsgType:
+		To: 	to,
+		From:	r.id,
+		Term:,
+		Commit:,
+	})
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
@@ -183,32 +212,103 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+
+	// if leader advance heartbeatElapsed
+	if r.State == StateLeader {
+		r.heartbeatElapsed++
+	}
+	// advance electionElapsed in any role
+	r.electionElapsed++
 }
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+
+	r.State = StateFollower
+	r.Lead = lead
+	r.Term = term
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+
+	// Do I need to do all of these? Where should they happen? From Ongaro paper:
+	// To begin an election, a follower increments its current
+	// term and transitions to candidate state. It then votes for
+	// itself and issues RequestVote RPCs in parallel to each of
+	// the other servers in the cluster. A candidate continues in
+	// this state until one of three things happens: (a) it wins the
+	// election, (b) another server establishes itself as leader, or
+	// (c) a period of time goes by with no winner. These outcomes
+	// are discussed separately in the paragraphs below.
+	r.Term++
+	r.State = StateCandidate
+	// append to r.msgs
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+
+	r.State = StateLeader
+
+	// TestLeaderBcastBeat tests that if the leader receives a heartbeat tick,
+	// it will send a MessageType_MsgHeartbeat with m.Index = 0, m.LogTerm=0 and empty entries
+	// as heartbeat to all followers.
+	// Reference: section 5.2
+	// func TestLeaderBcastBeat2AA(t *testing.T) {}
+	for f := range r.Prs {
+		r.msgs = append(r.msgs, pb.Message {
+			MsgType:	MessageType_MsgHeartbeat
+			To: 		f,
+			From:		r.id,
+			LogTerm:	0,
+			Index:		0,
+		})
+	}
 }
 
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	switch r.State {
+
+	switch r.State { // case if statemachine in this state receives this type of msg
 	case StateFollower:
+		// MessageType_MsgHup >> start new election
+		// MessageType_MsgPropose >> a local message that proposes to append data to the leader's log entries
+		// MessageType_MsgAppend >> contains log entries to replicate (from leader)
+		// MessageType_MsgRequestVote >> requests votes for election
+
+		// Arguments:
+		// term			candidate’s term
+		// candidateId		candidate requesting vote
+		// lastLogIndex	index of candidate’s last log entry (§5.4)
+		// lastLogTerm		term of candidate’s last log entry (§5.4)
+
+		// Results:
+		// term			currentTerm, for candidate to update itself
+		// voteGranted		true means candidate received vote
+
+		// Receiver implementation:
+		// 1. Reply false if term < currentTerm (§5.1)
+		// 2. If votedFor is null or candidateId, and candidate’s log is at
+		// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
+
+		// MessageType_MsgSnapshot >> requests to install a snapshot message.
+		// MessageType_MsgHeartbeat >> sends heartbeat from leader to its followers.
+
 	case StateCandidate:
+		// MessageType_MsgRequestVoteResponse
+
 	case StateLeader:
+		// MessageType_MsgBeat >> signal leader to send heartbeat
+		// MessageType_MsgAppendResponse >> response
+		// MessageType_MsgHeartbeatResponse >> a response to 'MessageType_MsgHeartbeat'.
+		// MessageType_MsgTransferLeader >> requests leader to transfer leadership
 	}
 	return nil
 }
@@ -216,11 +316,35 @@ func (r *Raft) Step(m pb.Message) error {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+
+	// Invoked by leader to replicate log entries (§5.3); also used as heartbeat (§5.2).
+	// Arguments:	
+	// 	term			leader’s term
+	// 	leaderId		so follower can redirect clients
+	// 	prevLogIndex 	index of log entry immediately preceding new ones
+	// 	prevLogTerm		term of prevLogIndex entry
+	// 	entries[]		log entries to store (empty for heartbeat;
+	// 					may send more than one for efficiency)
+	// 	leaderCommit	leader’s commitIndex
+	// Results:
+	// 	term		currentTerm, for leader to update itself
+	// 	success		true if follower contained entry matching
+	// 				prevLogIndex and prevLogTerm
+	// Receiver implementation:
+	// 1. Reply false if term < currentTerm (§5.1)
+	// 2. Reply false if log doesn’t contain an entry at prevLogIndex
+	//    whose term matches prevLogTerm (§5.3)
+	// 3. If an existing entry conflicts with a new one (same index
+	//    but different terms), delete the existing entry and all that
+	//    follow it (§5.3)
+	// 4. Append any new entries not already in the log
+	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 }
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+
 }
 
 // handleSnapshot handle Snapshot RPC request

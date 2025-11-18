@@ -1,11 +1,11 @@
 package standalone_storage
 
 import (
+	"github.com/Connor1996/badger"                  // revised badger version used by TinyKV
 	"github.com/pingcap-incubator/tinykv/kv/config" // where path to db is
 	"github.com/pingcap-incubator/tinykv/kv/storage"
-	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
-	"github.com/Connor1996/badger" // revised badger version used by TinyKV
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util" // functions to define engine
+	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
 	"os"
 )
 
@@ -18,7 +18,7 @@ import (
 type StandAloneStorage struct {
 	// Your Data Here (1).
 
-	db *badger.DB
+	db   *badger.DB
 	conf *config.Config
 }
 
@@ -26,8 +26,8 @@ func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 	// Your Code Here (1).
 
 	return &StandAloneStorage{
-		db:		nil,
-		conf:	conf,
+		db:   nil,
+		conf: conf,
 	}
 }
 
@@ -40,7 +40,7 @@ func (s *StandAloneStorage) Start() error {
 	if err := os.MkdirAll(opts.Dir, os.ModePerm); err != nil {
 		return err
 	}
-	
+
 	// function Open() initializes variables and allocates space for db if path does exist yet, or open existing db if it does
 	var err error
 	s.db, err = badger.Open(opts)
@@ -52,7 +52,6 @@ func (s *StandAloneStorage) Stop() error {
 	// function Close() closes db
 	return s.db.Close()
 }
-
 
 func (s *StandAloneStorage) Reader(ctx *kvrpcpb.Context) (storage.StorageReader, error) {
 	// Your Code Here (1).
@@ -83,26 +82,25 @@ func (r *StandAloneReader) Close() {
 	r.txn.Discard()
 }
 
-
 func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) error {
 	// Your Code Here (1).
 
 	wb := new(engine_util.WriteBatch)
 
-    for _, m := range batch {
+	for _, m := range batch {
 		// before := len(wb.entries)
-        switch m.Data.(type) {
-        case storage.Put:
-            put := m.Data.(storage.Put)
-            wb.SetCF(put.Cf, put.Key, put.Value) // how to handle error????
-        case storage.Delete:
-            delete := m.Data.(storage.Delete)
-            wb.DeleteCF(delete.Cf, delete.Key) // how to handle error????
-        }
+		switch m.Data.(type) {
+		case storage.Put:
+			put := m.Data.(storage.Put)
+			wb.SetCF(put.Cf, put.Key, put.Value) // how to handle error????
+		case storage.Delete:
+			delete := m.Data.(storage.Delete)
+			wb.DeleteCF(delete.Cf, delete.Key) // how to handle error????
+		}
 		// if before == len(wb.entries) {
-			// how to define error?
+		// how to define error?
 		// }
-    }
+	}
 	if err := wb.WriteToDB(s.db); err != nil {
 		return err
 	}
