@@ -165,6 +165,7 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 
+
 	// Your Code Here (2A).
 
 	return &Raft{
@@ -315,6 +316,8 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+
+	switch r.State { // case if statemachine in this state receives this type of msg
 
 	switch r.State { // case if statemachine in this state receives this type of msg
 	case StateFollower:
