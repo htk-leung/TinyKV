@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"bytes"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -189,30 +190,35 @@ func (r *Raft) sendAppend(to uint64) bool {
 	If you need to send out a message, just push it to raft.Raft.msgs and
 	all messages the raft received will be passed to raft.Raft.Step()
 	*/
-	if to != r.lead {
+	if to != r.Lead {
 		return false
 	}
 
 	if r.RaftLog.committed > r.RaftLog.applied {
+		entriesptrs := make([]*pb.Entry, r.RaftLog.committed - r.RaftLog.applied)
+		for _, entry := range r.RaftLog.entries[r.RaftLog.applied+1 : ] {
+			entriesptrs = append(entriesptrs, &entry)
+		}
+
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgAppend,
-			To:      to,
-			From:    r.id,
-			Term:    r.Term,
-			LogTerm: r.RaftLog.entries[r.Raftlog.applied].Term, // prevLogTerm - term of prevLogIndex entry
-			Index:   r.Raftlog.applied,                         // prevLogIndex - index of log entry immediately preceding new ones
-			Entries: r.RaftLog.entries[r.RaftLog.applied+1 : r.RaftLog.committed],
-			Commit:  r.RaftLog.committed, // committed must be updated before calling sendappend
+			MsgType: 	pb.MessageType_MsgAppend,
+			To:      	to,
+			From:    	r.id,
+			Term:    	r.Term,
+			LogTerm: 	r.RaftLog.entries[r.RaftLog.applied].Term, // prevLogTerm - term of prevLogIndex entry
+			Index:   	r.RaftLog.applied,                         // prevLogIndex - index of log entry immediately preceding new ones
+			Entries: 	entriesptrs,
+			Commit:  	r.RaftLog.committed, // committed must be updated before calling sendappend
 		})
 	} else {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgAppend,
-			To:      to,
-			From:    r.id,
-			Term:    r.Term,
-			LogTerm: r.RaftLog.entries[r.Raftlog.applied].Term,
-			Index:   r.Raftlog.applied,
-			Commit:  r.RaftLog.committed,
+			MsgType: 	pb.MessageType_MsgAppend,
+			To:      	to,
+			From:    	r.id,
+			Term:    	r.Term,
+			LogTerm: 	r.RaftLog.entries[r.RaftLog.applied].Term,
+			Index:   	r.RaftLog.applied,
+			Commit:  	r.RaftLog.committed,
 		})
 	}
 
@@ -225,12 +231,12 @@ func (r *Raft) sendHeartbeat(to uint64) {
 
 	// Same as above but Entries is always empty
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: MessageType_MsgAppend,
+		MsgType: pb.MessageType_MsgAppend,
 		To:      to,
 		From:    r.id,
 		Term:    r.Term,
-		LogTerm: r.RaftLog.entries[r.Raftlog.applied].Term,
-		Index:   r.Raftlog.applied,
+		LogTerm: r.RaftLog.entries[r.RaftLog.applied].Term,
+		Index:   r.RaftLog.applied,
 		Commit:  r.RaftLog.committed,
 	})
 }
@@ -277,12 +283,12 @@ func (r *Raft) becomeCandidate() {
 	// issues RequestVote RPCs in parallel to each of the other servers in the cluster.
 	for p := range r.Prs {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgRequestVote,
+			MsgType: pb.MessageType_MsgRequestVote,
 			To:      p,
 			From:    r.id,
 			Term:    r.Term,
-			LogTerm: r.RaftLog.entries[r.Raftlog.committed].Term,
-			Index:   r.Raftlog.applied, // should this be committed or applied?
+			LogTerm: r.RaftLog.entries[r.RaftLog.committed].Term,
+			Index:   r.RaftLog.applied, // should this be committed or applied?
 		})
 	}
 }
@@ -300,9 +306,9 @@ func (r *Raft) becomeLeader() {
 	r.heartbeatElapsed = 0
 
 	// propose noop entry = new empty entry in log
-	entries = make([]*eraftpb.Entry)
-	entries = append(entries, &eraftpb.Entry{
-		EntryType: EntryType_EntryNormal,
+	entries := make([]*pb.Entry, 1)
+	entries = append(entries, &pb.Entry{
+		EntryType: pb.EntryType_EntryNormal,
 		Term:      r.Term,
 		Index:     0,
 	})
@@ -318,27 +324,25 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 
 	switch r.State { // case if statemachine in this state receives this type of msg
-
-	switch r.State { // case if statemachine in this state receives this type of msg
 	case StateFollower:
 
 		switch m.MsgType {
 
 		// MessageType_MsgHup >> start new election
-		case MessageType_MsgHup:
+		case pb.MessageType_MsgHup:
 			// issued when there is an electionTimeout, server starts campaign
 			r.campaign(m)
 
 		// 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
 		// of the 'MessageType_MsgHeartbeat' type to its followers.
-		case MessageType_MsgBeat:
+		case pb.MessageType_MsgBeat:
 			// if a follower somehow gets this message it means that this server was a leader but had stepped down
 			// and either the server hadn't updated its info or the message was delayed
 			// forward to leader
-			handleBeat(m)
+			r.handleBeat(m)
 
 		// 'MessageType_MsgPropose' is a local message that proposes to append data to the leader's log entries.
-		case MessageType_MsgPropose:
+		case pb.MessageType_MsgPropose:
 			// normally recevied by leader
 			// if a follower receives it maybe some server is mistaken
 			// save to msgs to be forwarded to leader later
@@ -347,45 +351,45 @@ func (r *Raft) Step(m pb.Message) error {
 			r.msgs = append(r.msgs, m)
 
 		// 'MessageType_MsgAppend' >> AppendEntries RPC
-		case MessageType_MsgAppend:
+		case pb.MessageType_MsgAppend:
 			// message sent with entries to append to log, call function to save entries
 			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgAppendResponse' >> AppendEntries RPC
-		case MessageType_MsgAppendResponse:
+		case pb.MessageType_MsgAppendResponse:
 			// MsgAppend is sent from leader to follower, and response from follower to leader
 			// doc.go: 	When 'MessageType_MsgAppend' is passed to candidate or follower's Step method, it responds by
 			// 			calling 'handleAppendEntries' method, which sends 'MessageType_MsgAppendResponse' to raft mailbox.
 			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgRequestVote' >> RequestVoteRPC
-		case MessageType_MsgRequestVote:
+		case pb.MessageType_MsgRequestVote:
 			r.fHandleRequestVote(m)
 
 		// 'MessageType_MsgRequestVoteResponse' >> RequestVoteRPC
-		case MessageType_MsgRequestVoteResponse:
+		case pb.MessageType_MsgRequestVoteResponse:
 			// if a follower somehow gets a response it means the candidate lost the election and has become a follower again
 			// vote is obsolete, ignore
 
 		// 'MessageType_MsgSnapshot' requests to install a snapshot message.
-		case MessageType_MsgSnapshot:
-			handleSnapshot(m)
+		case pb.MessageType_MsgSnapshot:
+			r.handleSnapshot(m)
 
 		// 'MessageType_MsgHeartbeat' >> AppendEntries RPC
-		case MessageType_MsgHeartbeat:
-			handleHeartbeat(m)
+		case pb.MessageType_MsgHeartbeat:
+			r.handleHeartbeat(m)
 
 		// 'MessageType_MsgHeartbeatResponse' >> AppendEntries RPC
-		case MessageType_MsgHeartbeatResponse:
+		case pb.MessageType_MsgHeartbeatResponse:
 			// normally received by leader, forward to leader
-			handleHeartbeat(m)
+			r.handleHeartbeat(m)
 
 		// 'MessageType_MsgTransferLeader' requests the leader to transfer its leadership.
-		case MessageType_MsgTransferLeader:
+		case pb.MessageType_MsgTransferLeader:
 
 		// 'MessageType_MsgTimeoutNow' send from the leader to the leadership transfer target, to let
 		// the transfer target timeout immediately and start a new election.
-		case MessageType_MsgTimeoutNow:
+		case pb.MessageType_MsgTimeoutNow:
 
 		}
 
@@ -393,111 +397,108 @@ func (r *Raft) Step(m pb.Message) error {
 
 		switch m.MsgType {
 		// MessageType_MsgHup : condidate continues to be candidate
-		case MessageType_MsgHup:
+		case pb.MessageType_MsgHup:
 			// if cand receives this it means there's election timeout during election, start again
 			r.campaign(m)
 
 		// 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
 		// of the 'MessageType_MsgHeartbeat' type to its followers.
-		case MessageType_MsgBeat:
+		case pb.MessageType_MsgBeat:
 			// not leader, no leader to forward to, ignore
 
 		// 'MessageType_MsgPropose' >> appendEntry RPC from server to leader
-		case MessageType_MsgPropose:
+		case pb.MessageType_MsgPropose:
 			// doc.go: When passed to candidate, 'MessageType_MsgPropose' is dropped.
 
 		// 'MessageType_MsgAppend' >> AppendEntries RPC
-		case MessageType_MsgAppend:
+		case pb.MessageType_MsgAppend:
 			// received from leader, means someone is elected
 			// become follower and append entries
 			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgAppendResponse' >> AppendEntries RPC
-		case MessageType_MsgAppendResponse:
+		case pb.MessageType_MsgAppendResponse:
 			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgRequestVote' >> RequestVoteRPC
-		case MessageType_MsgRequestVote:
+		case pb.MessageType_MsgRequestVote:
 			r.clHandleRequestVote(m)
 
 		// 'MessageType_MsgRequestVoteResponse' >> RequestVoteRPC
-		case MessageType_MsgRequestVoteResponse:
+		case pb.MessageType_MsgRequestVoteResponse:
 			// only a candidate needs to handle the response
 			r.handleRequestVoteResponse(m)
 
 		// 'MessageType_MsgSnapshot' requests to install a snapshot message. << (2C)
-		case MessageType_MsgSnapshot:
+		case pb.MessageType_MsgSnapshot:
 			r.handleSnapshot(m)
 
 		// 'MessageType_MsgHeartbeat' >> AppendEntries RPC
-		case MessageType_MsgHeartbeat:
+		case pb.MessageType_MsgHeartbeat:
 			r.handleHeartbeat(m)
 
 		// 'MessageType_MsgHeartbeatResponse' >> AppendEntries RPC
-		case MessageType_MsgHeartbeatResponse:
+		case pb.MessageType_MsgHeartbeatResponse:
 			// technically should not receive this
 			// but if it does,
 
 		// 'MessageType_MsgTransferLeader' requests the leader to transfer its leadership.
-		case MessageType_MsgTransferLeader:
+		case pb.MessageType_MsgTransferLeader:
 		// 'MessageType_MsgTimeoutNow' send from the leader to the leadership transfer target, to let
 		// the transfer target timeout immediately and start a new election.
-		case MessageType_MsgTimeoutNow:
+		case pb.MessageType_MsgTimeoutNow:
 		}
 
 	case StateLeader:
 
 		switch m.MsgType {
 		// MessageType_MsgHup
-		case MessageType_MsgHup:
+		case pb.MessageType_MsgHup:
 			// ignore
 
 		// 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
 		// of the 'MessageType_MsgHeartbeat' type to its followers.
-		case MessageType_MsgBeat:
+		case pb.MessageType_MsgBeat:
 			for p := range r.Prs {
 				r.sendHeartbeat(p)
 			}
 
 		// 'MessageType_MsgPropose' >> AppendEntries RPC from server to leader
-		case MessageType_MsgPropose:
+		case pb.MessageType_MsgPropose:
 			// calls appendEntry to append to entries
 			// calls bcastAppend to call sendAppend
 			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgAppend' >> AppendEntries RPC
-		case MessageType_MsgAppend:
+		case pb.MessageType_MsgAppend:
 			// should only be sent by leader, ignore
 			// unless term is higher? then become follower and respond
-			if m.Term > r.Term {
-				r.becomeFollower()
-				r.handleAppendEntries(m)
-			}
+			r.handleAppendEntries(m)
 
 		// 'MessageType_MsgAppendResponse' >> AppendEntries RPC
-		case MessageType_MsgAppendResponse:
+		case pb.MessageType_MsgAppendResponse:
 			r.handleAppendEntriesResponse(m)
 
 		// 'MessageType_MsgRequestVote' >> RequestVoteRPC
-		case MessageType_MsgRequestVote:
+		case pb.MessageType_MsgRequestVote:
 			r.clHandleRequestVote(m)
 
 		// 'MessageType_MsgRequestVoteResponse' >> RequestVote RPC
-		case MessageType_MsgRequestVoteResponse:
+		case pb.MessageType_MsgRequestVoteResponse:
 			// if a leader somehow gets a response it means the candidate has won and the response has no use
 			// ignore
 
 		// 'MessageType_MsgSnapshot' requests to install a snapshot message.
-		case MessageType_MsgSnapshot:
+		case pb.MessageType_MsgSnapshot:
 		// 'MessageType_MsgHeartbeat' >> AppendEntries RPC
-		case MessageType_MsgHeartbeat:
+		case pb.MessageType_MsgHeartbeat:
 		// 'MessageType_MsgHeartbeatResponse' >> AppendEntries RPC
-		case MessageType_MsgHeartbeatResponse:
+		case pb.MessageType_MsgHeartbeatResponse:
 		// 'MessageType_MsgTransferLeader' requests the leader to transfer its leadership.
-		case MessageType_MsgTransferLeader:
+		case pb.MessageType_MsgTransferLeader:
 		// 'MessageType_MsgTimeoutNow' send from the leader to the leadership transfer target, to let
 		// the transfer target timeout immediately and start a new election.
-		case MessageType_MsgTimeoutNow:
+		case pb.MessageType_MsgTimeoutNow:
 
 		}
 	}
@@ -525,7 +526,7 @@ func (r *Raft) campaign(m pb.Message) {
 	// sends 'MessageType_MsgRequestVote' to peers
 	for p := range r.Prs {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgRequestVote,
+			MsgType: pb.MessageType_MsgRequestVote,
 			To:      p,
 			From:    r.id,
 			Term:    r.Term,
@@ -556,7 +557,7 @@ func (r *Raft) clHandleRequestVote(m pb.Message) {
 	// become follower if term is higher, handle as follower
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, m.From)
-		r.FhandleRequestVote(m)
+		r.fHandleRequestVote(m)
 		return
 	}
 
@@ -564,9 +565,9 @@ func (r *Raft) clHandleRequestVote(m pb.Message) {
 	// B. 	if terms are the same msg is received from a fellow competitor
 	// 		candidate : it's coming from its competition, but a candidate had voted for itself, so reject vote
 	// 		leader : means this server won the election and the sender lost. But leader should have sent heartbeat. ignore
-	if m.Term < r.Term || r.StateType == StateCandidate {
+	if m.Term < r.Term || r.State == StateCandidate {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgRequestVoteResponse,
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
 			To:      m.From,
 			From:    r.id,
 			Term:    r.Term,
@@ -604,7 +605,7 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 	// log term or leadership term?
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgRequestVoteResponse,
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
 			To:      m.From,
 			From:    r.id,
 			Term:    r.Term,
@@ -633,7 +634,7 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 
 	// return
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: MessageType_MsgRequestVoteResponse,
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		To:      m.From,
 		From:    r.id,
 		Term:    r.Term,
@@ -663,26 +664,25 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 	// count to see where we are now
 	var votedFor, votedAgainst, quorum int
 
-	for _, vote := range v.votes {
+	for _, vote := range r.votes {
 		if vote == true {
 			votedFor++
 		}
 	}
-	votedAgainst = len[v.votes] - votedFor
+	votedAgainst = len(r.votes) - votedFor
 	quorum = len(r.Prs)/2 + 1
 
 	if votedFor >= quorum {
 		r.becomeLeader()
-		r.bcastAppend() // ?
 	} else if votedAgainst >= quorum {
 		r.becomeFollower(r.Term, r.Lead) // update again when first heartbeat from leader received
 	}
 	// else do nothing
 }
-func (r *Raft) appendEntries(entries []*eraftpb.Entry) {
+func (r *Raft) appendEntries(entries []*pb.Entry) {
 	// append
 	for _, entry := range entries {
-		r.RaftLog.entries = append(r.RaftLog.entries, entry)
+		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 		r.RaftLog.committed++
 	}
 	// anything else to update?
@@ -735,7 +735,7 @@ func (r *Raft) bcastAppend() {
 	*/
 
 	for p := range r.Prs {
-		sendAppend(p)
+		r.sendAppend(p)
 	}
 }
 
@@ -760,19 +760,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 						prevLogIndex and prevLogTerm
 		Receiver implementation:
 		1. Reply false if term < currentTerm (§5.1)
-		2. Reply false if log doesn’t contain an entry at prevLogIndex
-		whose term matches prevLogTerm (§5.3)
+		2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 		3. If an existing entry conflicts with a new one (same index
-		but different terms), delete the existing entry and all that
-		follow it (§5.3)
+		   but different terms), delete the existing entry and all that
+		   follow it (§5.3)
 		4. Append any new entries not already in the log
 		5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	*/
 	// assume m.entries have increasing index
 	// first entry should have smallest index
 
-	// how to detect that it's forwarding a response? By type
-	if m.MsgType == MessageType_MsgAppendResponse {
+	// detect that it's forwarding a response by type
+	if m.MsgType == pb.MessageType_MsgAppendResponse {
 		m.To = r.Lead
 		r.msgs = append(r.msgs, m)
 		return
@@ -781,21 +780,24 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Reply false if term < currentTerm (§5.1)
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgAppendResponse,
-			To:      m.From,
-			From:    r.id,
-			Term:    r.Term,
-			Reject:  true,
+			MsgType: 	pb.MessageType_MsgAppendResponse,
+			To:      	m.From,
+			From:    	r.id,
+			Term:    	r.Term,
+			Reject:  	true,
 		})
 		return
-	} else if m.Term > r.Term || r.State == StateCandidate { // if m.Term >= local then become follower
+	} else if m.Term >= r.Term && (r.State == StateLeader || r.State == StateCandidate) { 
+		r.becomeFollower(m.Term, m.From)
+	} else if m.Term > r.Term && r.State == StateFollower {
+		// update term for follower only when term has changed
 		r.becomeFollower(m.Term, m.From)
 	}
 
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if (r.RaftLog.committed < m.Index) || r.RaftLog.entries[m.Index].Term != m.LogTerm {
 		r.msgs = append(r.msgs, pb.Message{
-			MsgType: MessageType_MsgAppendResponse,
+			MsgType: pb.MessageType_MsgAppendResponse,
 			To:      m.From,
 			From:    r.id,
 			Term:    r.Term,
@@ -803,40 +805,42 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		})
 		return
 	}
+
 	// append new entries to log. How to find from where to start:
 	// if entry exists && everything matches, check next
 	var matches bool
-	var rEndInd, mStartInd int
+	var rEndInd, mStartInd, i uint64
 
-	for i, mentry := range m.Entries {
+	for _, mEntry := range m.Entries {
 		// reset
 		matches = false
 
 		// if entry exists && everything matches
-		if r.RaftLog.committed >= mentry.Index {
-			if rentry.EntryType == mentry.EntryType &&
-				rentry.Term == mentry.Term &&
-				rentry.Index == mentry.Index &&
-				bytes.Equal(rentry.Data, mentry.Data) {
+		if r.RaftLog.committed >= mEntry.Index {
+			if r.RaftLog.entries[mEntry.Index].EntryType == mEntry.EntryType &&
+				r.RaftLog.entries[mEntry.Index].Term == mEntry.Term &&
+				r.RaftLog.entries[mEntry.Index].Index == mEntry.Index &&
+				bytes.Equal(r.RaftLog.entries[mEntry.Index].Data, mEntry.Data) {
 				matches = true // mark match
 			}
 		}
 		// and check until record doesn't match
 		// record i to start appending from here
 		if matches == false {
-			rEndInd = mentry.Index
+			rEndInd = mEntry.Index
 			mStartInd = i
 			break
 		}
+		i++
 	}
 	// entry doesn't exist / doesn't match, remove entries from that entry onwards
 	r.RaftLog.entries = r.RaftLog.entries[:rEndInd]
 
 	// append new ones
-	var rLastInd int
+	var rLastInd uint64
 	for _, mEntry := range m.Entries[mStartInd:] {
-		r.RaftLog.entries = append(r.RaftLog.entries, mEntry)
-		rLastInd = mentry.Index
+		r.RaftLog.entries = append(r.RaftLog.entries, *mEntry)
+		rLastInd = mEntry.Index
 	}
 
 	// if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
@@ -846,11 +850,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	// done
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: MessageType_MsgAppendResponse,
+		MsgType: pb.MessageType_MsgAppendResponse,
 		To:      m.From,
 		From:    r.id,
 		Term:    r.Term,
-		Index:   lastInd,
+		Index:   rLastInd,
 		Reject:  false,
 	})
 }
@@ -896,12 +900,12 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 	// if we are forwarding response message
-	if m.MsgType == MessageType_MsgHeartbeatResponse {
+	if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 		m.To = r.Lead
 		r.msgs = append(r.msgs, m)
 	}
 	// message should only be heartbeat from here
-	if m.MsgType != MessageType_MsgHeartbeat {
+	if m.MsgType != pb.MessageType_MsgHeartbeat {
 		return
 	}
 
@@ -917,7 +921,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 
 	// return
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: MessageType_MsgHeartbeatResponse,
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		To:      m.From,
 		From:    m.To,
 		Term:    r.Term,
