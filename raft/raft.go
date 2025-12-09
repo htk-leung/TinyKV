@@ -335,7 +335,7 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	// fmt.Printf("In Step for r.id = %d msgType : %v term : %d\n", r.id, m.MsgType, m.Term)
+	// fmt.Printf("In Step for r.id = %d r.Lead = %d msgType : %v term : %d\n", r.id, r.Lead, m.MsgType, m.Term)
 
 	switch m.MsgType {
 
@@ -349,7 +349,6 @@ func (r *Raft) Step(m pb.Message) error {
 			r.campaign(m)
 		case StateLeader:
 		}
-		
 
 	// 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
 	// of the 'MessageType_MsgHeartbeat' type to its followers.
@@ -542,31 +541,34 @@ func (r *Raft) clHandleRequestVote(m pb.Message) {
 	term			currentTerm, for candidate to update itself
 	voteGranted		true means candidate received vote
 	*/
-	// fmt.Printf("In clHandleRequestVote(m) r.id = %d\n", r.id)
+
+	// fmt.Printf("In clHandleRequestVote(m) r.id = %d m.Term = %d r.Term = %d\n", r.id, m.Term, r.Term)
+
 	// reject if term is smaller
 	if m.Term < r.Term || (r.State != StateCandidate && r.State != StateLeader) {
+		// fmt.Printf("\tincoming term smaller than local term, ignored\n")
 		return
 	}
 
 	// become follower if term is higher, handle as follower
 	if m.Term > r.Term {
-		r.becomeFollower(m.Term, m.From)
+		// fmt.Printf("\tincoming term greated than local term, handle as follower\n")
+		r.becomeFollower(m.Term, 0)
 		r.fHandleRequestVote(m)
 		return
 	}
 	
 	// if terms are the same msg is received from a fellow competitor
 	// 		candidate : it's coming from its competition, but a candidate had voted for itself, so reject vote
-	// 		leader : means this server won the election and the sender lost. But leader should have sent heartbeat. ignore
-	if r.State == StateCandidate {
-		r.msgs = append(r.msgs, pb.Message{
-			MsgType: pb.MessageType_MsgRequestVoteResponse,
-			To:      m.From,
-			From:    r.id,
-			Term:    r.Term,
-			Reject:  true,
-		})
-	}
+	// 		leader : means this server won the election and the sender lost. Reject
+	// fmt.Printf("\tincoming term equal to local term, reject\n")
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		To:      m.From,
+		From:    r.id,
+		Term:    r.Term,
+		Reject:  true,
+	})
 }
 func (r *Raft) fHandleRequestVote(m pb.Message) {
 	/* from raft/doc.go
@@ -598,7 +600,7 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 
 	// if request has higher term leader failed
 	if m.Term > r.Term {
-		r.becomeFollower(m.Term, 0)
+		r.becomeFollower(m.Term, None)
 	}
 
 	// if candidate log is *at least as* up to date as the local log
@@ -864,32 +866,6 @@ func (r *Raft) handlePropose(m pb.Message) {
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 
-	/*	from Raft paper
-		Invoked by leader to replicate log entries (§5.3); also used as heartbeat (§5.2).
-		input m Arguments:
-			term			leader’s term
-			leaderId		so follower can redirect clients
-			prevLogIndex 	index of log entry immediately preceding new ones
-			prevLogTerm		term of prevLogIndex entry
-			entries[]		log entries to store (empty for heartbeat;
-							may send more than one for efficiency)
-			leaderCommit	leader’s commitIndex
-		Results:
-			term		currentTerm, for leader to update itself
-			success		true if follower contained entry matching
-						prevLogIndex and prevLogTerm
-		Receiver implementation:
-		1. Reply false if term < currentTerm (§5.1)
-		2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-		3. If an existing entry conflicts with a new one (same index
-		   but different terms), delete the existing entry and all that
-		   follow it (§5.3)
-		4. Append any new entries not already in the log
-		5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-	*/
-	// assume m.entries have increasing index
-	// first entry should have smallest index
-
 	// fmt.Printf("In handleAppendEntries of r.id = %d for m.Logterm = %d m.Index = %d\n", r.id, m.LogTerm, m.Index)
 
 	if m.Term < r.Term {
@@ -909,7 +885,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// change candidate to follower if someone else has won the election
 	if r.State == StateCandidate { 
 		r.becomeFollower(m.Term, m.From)
-	} else if m.Term > r.Term && (r.State == StateLeader || r.State == StateFollower) {
+	} else if m.Term >= r.Term && (r.State == StateLeader || r.State == StateFollower) {
 		r.becomeFollower(m.Term, m.From)
 		// leader receiving AppendEntries RPC in same term is byzantine error
 		// panic("Leader in the same term sending another leader AppendEntries RPC")
@@ -1124,27 +1100,35 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	}
 
 	// reset heartbeat timeout
-	r.heartbeatElapsed = 0
+	r.electionElapsed = 0
 
 	// update committed and apply if m.Index > r.RaftLog.committed 
 	// fmt.Printf("m.Index = %d, r.RaftLog.committed = %d\n", m.Index, r.RaftLog.committed)
 	if m.Index > r.RaftLog.committed {
-		r.RaftLog.committed = m.Index
+		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 		// apply r.RaftLog.entries[applied+1 : committed+1]
 	}
 	// fmt.Printf("m.Index = %d, r.RaftLog.committed = %d\n", m.Index, r.RaftLog.committed)
 
 	// return
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: pb.MessageType_MsgHeartbeatResponse,
-		To:      m.From,
-		From:    m.To,
-		Term:    r.Term,
+		MsgType: 	pb.MessageType_MsgHeartbeatResponse,
+		To:      	m.From,
+		From:    	r.id,
+		Term:    	r.Term,
+		Index: 		r.RaftLog.LastIndex(),
 	})
 }
 
 func (r *Raft) handleHeartbeatResponse(m pb.Message) {
+	// func TestCommitWithHeartbeat2AB(t *testing.T) {}
+	// TestCommitWithHeartbeat tests leader can send log
+	// to follower when it received a heartbeat response
+	// which indicate it doesn't have update-to-date log
 
+	if m.Index < r.RaftLog.LastIndex() {
+		r.sendAppend(m.From)
+	}
 }
 
 // handleSnapshot handle Snapshot RPC request

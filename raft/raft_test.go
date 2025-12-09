@@ -648,7 +648,7 @@ func TestRecvMessageType_MsgRequestVote2AB(t *testing.T) {
 		{StateFollower, 3, 2, 2, false},
 		{StateFollower, 3, 2, 1, true},
 
-		{StateLeader, 3, 3, 1, true},
+		{StateLeader, 3, 3, 1, true}, // THIS FAILED
 		{StateCandidate, 3, 3, 1, true},
 	}
 
@@ -660,6 +660,7 @@ func TestRecvMessageType_MsgRequestVote2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
+		// fmt.Printf("In loop %d:\n", i)
 		sm := newTestRaft(1, []uint64{1, 2}, 10, 1, NewMemoryStorage())
 		sm.State = tt.state
 		sm.Vote = tt.voteFor
@@ -712,6 +713,7 @@ func TestAllServerStepdown2AB(t *testing.T) {
 	tterm := uint64(3)
 
 	for i, tt := range tests {
+		// fmt.Printf("In loop %d:\n", i)
 		sm := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 		switch tt.state {
 		case StateFollower:
@@ -724,6 +726,8 @@ func TestAllServerStepdown2AB(t *testing.T) {
 		}
 
 		for j, msgType := range tmsgTypes {
+			// fmt.Printf("\tmsgType: %v\n", msgType)
+			// fmt.Printf("\tsm.Term: %d\n", sm.Term)
 			sm.Step(pb.Message{From: 2, MsgType: msgType, Term: tterm, LogTerm: tterm})
 
 			if sm.State != tt.wstate {
@@ -1638,7 +1642,7 @@ func (nw *network) send(msgs ...pb.Message) {
 		// fmt.Printf("\t%d msgs remaining: \n", len(msgs))
 		m := msgs[0]
 		// fmt.Printf("\tcurrent message from : %d, to : %d, MsgType : %v\n", m.From, m.To, m.MsgType,)
-		p := nw.peers[m.To]
+		p := nw.peers[m.To] 
 		// fmt.Printf("\thandled by %d : \n", p)
 		p.Step(m)
 		msgs = append(msgs[1:], nw.filter(p.readMessages())...)
