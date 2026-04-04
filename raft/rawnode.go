@@ -17,7 +17,6 @@ package raft
 import (
 	"errors"
 	"reflect"
-	"fmt"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -174,7 +173,6 @@ func (rn *RawNode) Ready() Ready {
 	if !reflect.DeepEqual(softstate, rn.prevSoftState) {
 		ready.SoftState = softstate
 	}
-	fmt.Println("1")
 
 	hardstate := pb.HardState{
 		Term: rn.Raft.Term,
@@ -184,24 +182,19 @@ func (rn *RawNode) Ready() Ready {
 	if !reflect.DeepEqual(hardstate, rn.prevHardState) {
 		ready.HardState = hardstate
 	}
-	fmt.Println("2")
 
 	ready.Entries = rn.Raft.RaftLog.unstableEntries()
-	fmt.Println("3")
 
 	snapshot := rn.Raft.RaftLog.pendingSnapshot
 	if !IsEmptySnap(snapshot) {
 		ready.Snapshot = *snapshot
 	}
-	fmt.Println("4")
 
 	ready.CommittedEntries = rn.Raft.RaftLog.nextEnts()
-	fmt.Println("5")
 
 	if len(rn.Raft.msgs) > 0 {
 		ready.Messages = rn.Raft.msgs
 	}
-	fmt.Println("6")
 
 	return ready
 }

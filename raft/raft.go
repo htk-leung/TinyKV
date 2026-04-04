@@ -458,7 +458,7 @@ func (r *Raft) Step(m pb.Message) error {
 		switch r.State { // case if statemachine in this state receives this type of msg
 		case StateFollower:
 			// normally received by leader, forward to leader
-			r.handleHeartbeat(m)
+			// r.handleHeartbeat(m)
 		case StateCandidate:
 		case StateLeader:
 			r.handleHeartbeatResponse(m)
@@ -887,12 +887,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	// assume incoming messages of lower term handled in Step()
 	// change candidate to follower if someone else has won the election
-	if r.State == StateCandidate { 
-		r.becomeFollower(m.Term, m.From)
-	} else if m.Term >= r.Term && (r.State == StateLeader || r.State == StateFollower) {
-		r.becomeFollower(m.Term, m.From)
+	if m.Term > r.Term && r.State == StateLeader { 
 		// leader receiving AppendEntries RPC in same term is byzantine error
-		// panic("Leader in the same term sending another leader AppendEntries RPC")
+		r.becomeFollower(m.Term, m.From)
+	} else if m.Term >= r.Term && (r.State == StateCandidate || r.State == StateFollower) {
+		r.becomeFollower(m.Term, m.From)
 	}
 
 	offset := r.RaftLog.entries[0].Index
@@ -1089,19 +1088,19 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		When 'MessageType_MsgHeartbeatResponse' is passed to the leader's Step method, 
 		the leader knows which follower responded.
 	*/
+	if m.Term < r.Term {
+		return
+	}
+	// becomeFollower updates Term and Lead
+	if m.Term >= r.Term {
+		r.becomeFollower(m.Term, m.From)
+	}
 
 	// if we are forwarding response message
 	if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 		m.To = r.Lead
 		r.msgs = append(r.msgs, m)
-	}
-	// message should only be heartbeat from here
-	if m.MsgType != pb.MessageType_MsgHeartbeat {
 		return
-	}
-	// becomeFollower updates Term and Lead
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, m.From)
 	}
 
 	// reset heartbeat timeout
@@ -1116,6 +1115,9 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	// fmt.Printf("m.Index = %d, r.RaftLog.committed = %d\n", m.Index, r.RaftLog.committed)
 
 	// return
+	// if candidate use incoming term, don't update their term
+	// if follower use local term
+	// if leader and by now has >= term return leader term
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: 	pb.MessageType_MsgHeartbeatResponse,
 		To:      	m.From,
@@ -1138,7 +1140,7 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	// r.Prs[m.From].Match = m.Index ?
 	// r.Prs[m.From].Next = m.Index + 1
 
-	if m.Index < r.RaftLog.LastIndex() {
+	if r.State == StateLeader && m.Index < r.RaftLog.LastIndex() {
 		r.sendAppend(m.From)
 	}
 }

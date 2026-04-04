@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
-	"fmt"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -204,17 +203,17 @@ func TestRawNodeRestart2AC(t *testing.T) {
 	storage.SetHardState(st)
 	storage.Append(entries)
 	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, storage))
-	fmt.Println("A")
+
 	if err != nil {
 		t.Fatal(err)
 	}
 	rd := rawNode.Ready()
-	fmt.Println("B")
+
 	if !reflect.DeepEqual(rd, want) {
 		t.Errorf("g = %#v,\n             w   %#v", rd, want)
 	}
 	rawNode.Advance(rd)
-	fmt.Println("C")
+
 	if rawNode.HasReady() {
 		t.Errorf("unexpected Ready: %+v", rawNode.Ready())
 	}
