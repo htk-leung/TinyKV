@@ -16,6 +16,8 @@ package raft
 
 import (
 	"errors"
+	"reflect"
+	"fmt"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -77,15 +79,15 @@ type RawNode struct {
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 
-	raft = newRaft(config)
+	raft := newRaft(config)
 
 	softstate := &SoftState{
 		Lead: 0,
 		RaftState: StateFollower,
 	}
 
-	hardstate, _, error := config.Storage.InitialState()
-	if error != nil {
+	hardstate, _, err := config.Storage.InitialState()
+	if err != nil {
 		return nil, err
 	}
 
@@ -163,31 +165,45 @@ func (rn *RawNode) Step(m pb.Message) error {
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
 
+	ready := Ready{}
+
 	softstate := &SoftState{
 		Lead: rn.Raft.Lead,
 		RaftState: rn.Raft.State,
 	}
-	if reflect.DeepEqual(softstate, rn.prevSoftState) {
-		softstate = nil
+	if !reflect.DeepEqual(softstate, rn.prevSoftState) {
+		ready.SoftState = softstate
 	}
+	fmt.Println("1")
 
 	hardstate := pb.HardState{
 		Term: rn.Raft.Term,
 		Vote: rn.Raft.Vote,
 		Commit: rn.Raft.RaftLog.committed,
 	}
-	if hardstate == rn.prevHardState {
-		hardstate = pb.HardState{}
+	if !reflect.DeepEqual(hardstate, rn.prevHardState) {
+		ready.HardState = hardstate
 	}
+	fmt.Println("2")
 
-	return Ready{
-		SoftState: 			softstate,
-		HardState: 			hardstate,
-		Entries: 			rn.Raft.RaftLog.unstableEntries(),
-		Snapshot: 			rn.Raft.RaftLog.pendingSnapshot,
-		CommittedEntries: 	rn.Raft.RaftLog.nextEnts(),
-		Messages: 			rn.Raft.msgs,
+	ready.Entries = rn.Raft.RaftLog.unstableEntries()
+	fmt.Println("3")
+
+	snapshot := rn.Raft.RaftLog.pendingSnapshot
+	if !IsEmptySnap(snapshot) {
+		ready.Snapshot = *snapshot
 	}
+	fmt.Println("4")
+
+	ready.CommittedEntries = rn.Raft.RaftLog.nextEnts()
+	fmt.Println("5")
+
+	if len(rn.Raft.msgs) > 0 {
+		ready.Messages = rn.Raft.msgs
+	}
+	fmt.Println("6")
+
+	return ready
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
@@ -198,12 +214,12 @@ func (rn *RawNode) HasReady() bool {
         return true
     }
     // hardstate changed
-    hs := pb.HardState{Term: rn.Raft.Term, Vote: rn.Raft.Vote, Commit: rn.Raft.RaftLog.committed}
-    if hs != rn.prevHardState {
+    hardstate := pb.HardState{Term: rn.Raft.Term, Vote: rn.Raft.Vote, Commit: rn.Raft.RaftLog.committed}
+    if !reflect.DeepEqual(hardstate, rn.prevHardState) {
         return true
     }
     // has pending snapshot
-    if rn.Raft.RaftLog.pendingSnapshot != pb.Snapshot{} {
+    if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
         return true
     }
     // unstable entries
@@ -234,24 +250,24 @@ func (rn *RawNode) Advance(rd Ready) {
 	}
 	// update stabled
 	if len(rd.Entries) > 0 {
-		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].index
+		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
 	}
 	// update applied
 	if len(rd.CommittedEntries) > 0 {
-		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].index
+		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 	}
 	// clear messages
 	rn.Raft.msgs = nil
 }
 
-type Ready struct {
-	*SoftState
-	pb.HardState
-	Entries []pb.Entry
-	Snapshot pb.Snapshot
-	CommittedEntries []pb.Entry
-	Messages []pb.Message
-}
+// type Ready struct {
+// 	*SoftState
+// 	pb.HardState
+// 	Entries []pb.Entry
+// 	Snapshot pb.Snapshot
+// 	CommittedEntries []pb.Entry
+// 	Messages []pb.Message
+// }
 
 // GetProgress return the Progress of this node and its peers, if this
 // node is leader.
