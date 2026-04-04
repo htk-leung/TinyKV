@@ -159,8 +159,7 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
 	offset := l.entries[0].Index
-	ret := l.entries[l.applied-offset+1 : l.committed-offset+1]
-	return ret
+	return l.entries[l.applied-offset+1 : l.committed-offset+1]
 }
 
 // LastIndex return the last index of the log entries

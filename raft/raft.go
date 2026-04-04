@@ -207,7 +207,7 @@ func newRaft(c *Config) *Raft {
 }
 
 
-
+// V
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
@@ -521,8 +521,8 @@ func (r *Raft) campaign(m pb.Message) {
 				To:      	p,
 				From:    	r.id,
 				Term:    	r.Term,
-				LogTerm: 	lastEntryTerm, 	// term of candidate’s last log entry (§5.4)
-				Index:   	lastEntryIdx,      // index of candidate’s last log entry (§5.4)
+				LogTerm: 	lastEntryTerm, 		// term of candidate’s last log entry (§5.4)
+				Index:   	lastEntryIdx,      	// index of candidate’s last log entry (§5.4)
 			})
 		}
 	}
@@ -597,6 +597,10 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 	*/
 
 	// fmt.Printf("In fHandleRequestVote(m) r.id = %d\n", r.id)
+
+	if m.Term < r.Term {
+		return
+	}
 
 	// if request has higher term leader failed
 	if m.Term > r.Term {
@@ -751,7 +755,7 @@ func (r *Raft) bcastAppend() {
 	// fmt.Printf("In bcastappend for r.id = %d\n", r.id)
 	// validity check
 	if r.Lead != r.id {
-		return
+		panic("bcastAppend called by non-Leader")
 	}
 	// send requests
 	for p := range r.Prs {
@@ -1017,14 +1021,17 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	// >> progress struct Prs map[uint64]*Progress
 
 	// fmt.Printf("In handleAppendEntriesResponse of r : %d for response from %d, reject = %t Index = %d commit = %d\n", r.id, m.From, m.Reject, m.Index, r.RaftLog.committed)
+	if r.id != r.Lead {
+		panic("Non-leader handling appendEntriesResponse")
+	}
+
+	// for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+	r.Prs[m.From].Next = m.Index + 1
+	// for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+	r.Prs[m.From].Match = m.Index
 
 	// if accepted, update r.Prs, committed, and send update to everyone
 	if m.Reject == false {
-		// for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
-		r.Prs[m.From].Next = m.Index + 1
-		// for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
-		r.Prs[m.From].Match = m.Index
-
 		// fmt.Printf("\tMatch updated to %d, Next %d\n", m.Index, m.Index+1)
 		// only update committed if the last entry replicated belongs to the current term
 		mIndexTerm, err := r.RaftLog.Term(uint64(m.Index))
@@ -1055,8 +1062,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		// if rejected decrement nextIndex and retry
 		// this means that the reply needs to carry the same entries as the request? Only if rejected? No because leader has raw info.
 		// details to be carried out in sendAppend
-		r.Prs[m.From].Next = m.Index + 1
-		r.Prs[m.From].Match = m.Index
 		r.sendAppend(m.From)
 	}
 }
@@ -1125,6 +1130,13 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	// TestCommitWithHeartbeat tests leader can send log
 	// to follower when it received a heartbeat response
 	// which indicate it doesn't have update-to-date log
+
+	// if r.id != r.Lead {
+	// 	panic("Non-leader handling heartbeatresponse")
+	// }?
+
+	// r.Prs[m.From].Match = m.Index ?
+	// r.Prs[m.From].Next = m.Index + 1
 
 	if m.Index < r.RaftLog.LastIndex() {
 		r.sendAppend(m.From)
