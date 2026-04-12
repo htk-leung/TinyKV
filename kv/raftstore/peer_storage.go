@@ -308,6 +308,35 @@ func ClearMeta(engines *engine_util.Engines, kvWB, raftWB *engine_util.WriteBatc
 // never be committed
 func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.WriteBatch) error {
 	// Your Code Here (2B).
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// clear stale data 
+	// what is stale? incoming entries have range of index. 
+	// existing entries with index >= incoming min will never be committed
+	// check existing last index, if >= incoming min, delete
+	incomingMinInd := entries[0].Index
+	existingMaxInd := ps.LastIndex()
+	regionID := ps.region.Id
+
+	if incomingMinInd <= existingMaxInd {
+		for i := incomingMinInd; i <= existingMaxInd; i++ {
+			raftWB.DeleteMeta(meta.RaftLogKey(regionID, i))
+		}
+	}
+
+	// add entries to wb
+	for _, entry := range entries {
+		raftWB.SetMeta(meta.RaftLogKey(regionID, entry.Index), &entry)
+	}
+
+	// update raftstate and add to wb
+	ps.raftState.LastIndex = entries[len(entries)-1].Index
+	ps.raftState.LastTerm = entries[len(entries)-1].Term
+	raftWB.SetMeta(meta.RaftStateKey(regionID), &ps.raftState)
+	
 	return nil
 }
 
@@ -331,6 +360,30 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, error) {
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
+
+	// apply snapshot
+
+	// create write batch
+	raftWB := new(engine_util.WriteBatch)
+
+	// hardstate handling if not empty
+	if !isEmptyHardState(ready.HardState) {
+		// update PeerStorage's hardstate
+		ps.raftState.HardState = ready.HardState
+		// add Hardstate to entries
+		raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), &ps.raftState)
+	}
+
+	// call append with new entries + update
+	if len(ready.Entries) > 0 {
+		if err := ps.Append(ready.Entries, raftWB); err != nil {
+			return nil, err
+		}
+	}
+
+	// write to db
+	raftWB.MustWriteToDB(ps.Engines.Raft)
+
 	return nil, nil
 }
 

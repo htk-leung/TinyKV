@@ -103,7 +103,6 @@ func newLog(storage Storage) *RaftLog {
         if err != nil {
             panic(err.Error())
         }
-		// fmt.Printf("now storageEntries has %d entries : %+v\n", len(storageEntries), storageEntries)
         
         // Get the term for the dummy entry 
         dummyTerm, err := storage.Term(firstIndex - 1)
@@ -177,7 +176,6 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// get vars
 	offset := l.entries[0].Index
     lastind := l.LastIndex()
-	// fmt.Printf("In l.Term : offset = %d lastind = %d for i = %d\n", offset, lastind, i)
 
 	// return if within bounds
 	if i >= offset && i <= lastind {

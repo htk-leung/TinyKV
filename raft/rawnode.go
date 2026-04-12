@@ -253,15 +253,6 @@ func (rn *RawNode) Advance(rd Ready) {
 	rn.Raft.msgs = nil
 }
 
-// type Ready struct {
-// 	*SoftState
-// 	pb.HardState
-// 	Entries []pb.Entry
-// 	Snapshot pb.Snapshot
-// 	CommittedEntries []pb.Entry
-// 	Messages []pb.Message
-// }
-
 // GetProgress return the Progress of this node and its peers, if this
 // node is leader.
 func (rn *RawNode) GetProgress() map[uint64]Progress {

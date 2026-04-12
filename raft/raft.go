@@ -283,8 +283,6 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 
-	// fmt.Printf("In becomeCandidate for r.id = %d\n", r.id)
-
 	// transitions to candidate state
 	r.State = StateCandidate
 	// follower increments its current term
@@ -306,8 +304,6 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-
-	// fmt.Printf("In becomeLeader for r.id = %d\n", r.id)
 
 	// update state
 	r.State = StateLeader
@@ -335,7 +331,6 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
-	// fmt.Printf("In Step for r.id = %d r.Lead = %d msgType : %v term : %d\n", r.id, r.Lead, m.MsgType, m.Term)
 
 	switch m.MsgType {
 
@@ -378,7 +373,6 @@ func (r *Raft) Step(m pb.Message) error {
 
 	// 'MessageType_MsgAppend' >> AppendEntries RPC
 	case pb.MessageType_MsgAppend:
-		// fmt.Printf("In Step(m) of r.id = %d for m.Logterm = %d m.Index = %d\n", r.id, m.LogTerm, m.Index)
 		switch r.State { // case if statemachine in this state receives this type of msg
 		case StateFollower:
 			// message sent with entries to append to log, call function to save entries
@@ -501,8 +495,6 @@ func (r *Raft) campaign(m pb.Message) {
 	lastLogTerm		term of candidate’s last log entry (§5.4)
 	*/
 
-	// fmt.Printf("In Campaign(m) for r.id = %d commit = %d entrieslen = %d term = %d\n", r.id, r.RaftLog.committed, len(r.RaftLog.entries), r.Term)
-
 	// node becomes candidate
 	r.becomeCandidate()
 
@@ -512,7 +504,6 @@ func (r *Raft) campaign(m pb.Message) {
 	if err != nil {
 		panic("lastEntryIdxN out of bounds for Term")
 	}
-	// fmt.Printf("\tSending RequestVoteRPC with term : %d, lastEntryIdx : %d, lastEntryTerm : %d\n", r.Term, lastEntryIdx, lastEntryTerm)
 	
 	for p := range r.Prs {
 		if p != r.id {			
@@ -542,17 +533,13 @@ func (r *Raft) clHandleRequestVote(m pb.Message) {
 	voteGranted		true means candidate received vote
 	*/
 
-	// fmt.Printf("In clHandleRequestVote(m) r.id = %d m.Term = %d r.Term = %d\n", r.id, m.Term, r.Term)
-
 	// reject if term is smaller
 	if m.Term < r.Term || (r.State != StateCandidate && r.State != StateLeader) {
-		// fmt.Printf("\tincoming term smaller than local term, ignored\n")
 		return
 	}
 
 	// become follower if term is higher, handle as follower
 	if m.Term > r.Term {
-		// fmt.Printf("\tincoming term greated than local term, handle as follower\n")
 		r.becomeFollower(m.Term, 0)
 		r.fHandleRequestVote(m)
 		return
@@ -561,7 +548,6 @@ func (r *Raft) clHandleRequestVote(m pb.Message) {
 	// if terms are the same msg is received from a fellow competitor
 	// 		candidate : it's coming from its competition, but a candidate had voted for itself, so reject vote
 	// 		leader : means this server won the election and the sender lost. Reject
-	// fmt.Printf("\tincoming term equal to local term, reject\n")
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgRequestVoteResponse,
 		To:      m.From,
@@ -596,8 +582,6 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 	- each server can only vote for 1 candidate per term
 	*/
 
-	// fmt.Printf("In fHandleRequestVote(m) r.id = %d\n", r.id)
-
 	if m.Term < r.Term {
 		return
 	}
@@ -623,7 +607,6 @@ func (r *Raft) fHandleRequestVote(m pb.Message) {
 		// if same last term, larger entry index is more up to date
 		candUpToDate = m.Index >= lastEntryInd
 	}
-	// fmt.Printf("\tcandidate log is up-to-date = %t with lastEntryTerm = %d, m.LogTerm = %d, lastEntryInd = %d, m.Index = %d\n", candUpToDate, lastEntryTerm, m.LogTerm, lastEntryInd, m.Index)
 
 	// if votedFor is null or candidateId then it can still vote
 	var votedForValid bool
@@ -655,11 +638,8 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 			- reverts back to follower.
 	*/
 
-	// fmt.Printf("In handleRequestVoteResponse(m) r.id = %d, m.From = %d\n", r.id, m.From)
-
 	// save response to map
 	r.votes[m.From] = !m.Reject // when becomes leader clear slice
-	// fmt.Print("Response saved to votes\n")
 
 	// count to see where we are now
 	var votedFor, votedAgainst, quorum int
@@ -671,20 +651,15 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 	}
 	votedAgainst = len(r.votes) - votedFor
-	// fmt.Printf("Counted votedFor = %d, votedAgainst = %d\n", votedFor, votedAgainst)
 
 	if votedFor >= quorum {
 		r.becomeLeader()
-		// fmt.Print("became leader\n")
 	} else if votedAgainst >= quorum {
 		r.becomeFollower(r.Term, r.Lead) // update again when first heartbeat from leader received
-		// fmt.Print("became follower\n")
 	}
 	// else do nothing
 }
 func (r *Raft) AppendEntries(entries []*pb.Entry) {
-
-	// fmt.Printf("In AppendEntries for r.id = %d\n", r.id)
 
 	// leader must append to entries
 	for _, entry := range entries {
@@ -694,7 +669,6 @@ func (r *Raft) AppendEntries(entries []*pb.Entry) {
 	// if leader is the only Raft member then update committed
 	if len(r.Prs) == 1 {
 		r.RaftLog.committed += uint64(len(entries))
-		// fmt.Printf("\t updated committed = %d with entrieslen = %d\n", r.RaftLog.committed, len(r.RaftLog.entries))
 	}
 	// regardless, update match and next
 	r.Prs[r.id].Match = r.RaftLog.LastIndex()
@@ -752,7 +726,6 @@ func (r *Raft) bcastAppend() {
 		>> always sent from leader to followers to ask followers to append entries
 		>> assumes entries already in r.RaftLog.entries
 	*/
-	// fmt.Printf("In bcastappend for r.id = %d\n", r.id)
 	// validity check
 	if r.Lead != r.id {
 		panic("bcastAppend called by non-Leader")
@@ -763,7 +736,6 @@ func (r *Raft) bcastAppend() {
 			r.sendAppend(p)
 		}
 	}
-	// fmt.Printf("finished calling sendAppend for each peer\n")
 }
 // sendAppend is called by leader through bcastappend to send an append RPC with new entries (if any) and
 // the current commit index to the given peer. Returns true if a message was sent.
@@ -776,28 +748,19 @@ func (r *Raft) sendAppend(to uint64) bool {
 	*/
 	// only called by leader
 
-	// fmt.Printf("In sendAppend for r.id = %d to = %d\n", r.id, to)
-
 	if to == r.Lead {
 		return false
 	}
 
-	// fmt.Printf("\tcommitted = %d, match = %d, entrieslen = %d\n", r.RaftLog.committed, r.Prs[to].Match, len(r.RaftLog.entries))
-
 	offset :=  r.RaftLog.entries[0].Index
 	prevLogEntry := r.RaftLog.entries[r.Prs[to].Match-offset]
-
-	// fmt.Printf("\toffset = %d, r.Prs[%d].Match = %d, r.Prs[to].Match-offset = %d\n", offset, to, r.Prs[to].Match, r.Prs[to].Match-offset)
 
 	if uint64(len(r.RaftLog.entries)) + offset > r.Prs[to].Match { // if there are things to send
 		entriesptrs := make([]*pb.Entry, 0)
 		for i := range r.RaftLog.entries[r.Prs[to].Next : ] {
 			entriesptrs = append(entriesptrs, &r.RaftLog.entries[r.Prs[to].Next + uint64(i)])
 		}
-		// for _, entry := range entriesptrs {
-		// 	fmt.Printf("\tappended msg index = %d, term = %d\n", entry.Index, entry.Term)
-		// }
-		// fmt.Printf("\tsending entries slice of length %d\n", len(entriesptrs))
+
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: 	pb.MessageType_MsgAppend,
 			To:      	to,
@@ -820,8 +783,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		})
 	}
 
-	// fmt.Printf("\tappended message with Term = %d, prevLogIndex = %d\n", r.Term, prevLogEntry.Index)
-
 	return true
 }
 
@@ -829,11 +790,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 func (r *Raft) handlePropose(m pb.Message) {
 	// Your Code Here (2A).
 
-	// fmt.Printf("In handlePropose for r.id = %d\n", r.id)
-
 	// becomefollower if someone else has higher term
-	// then?? ignore?
-	// but who is leader?
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, m.From)
 		return
@@ -846,31 +803,22 @@ func (r *Raft) handlePropose(m pb.Message) {
 		return
 	}
 
-	// 1. assign term and index
+	// assign term and index
 	eInd := r.RaftLog.LastIndex()
 	for i, entry := range m.Entries {
 		entry.Term = r.Term
 		entry.Index = eInd + uint64(i) + 1
-		// r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 	}
-	// 2. appendentries
-	// 3. update leader progress
-	// fmt.Printf("Before append : entries len %d\n", len(r.RaftLog.entries))
-	// fmt.Printf("Before update : Match %d Next %d\n", r.Prs[r.id].Match, r.Prs[r.id].Next)
+	// appendentries
 	r.AppendEntries(m.Entries)
-	// fmt.Printf("After append : entries len %d\n", len(r.RaftLog.entries))
-	// fmt.Printf("After update : Match %d Next %d\n", r.Prs[r.id].Match, r.Prs[r.id].Next)
-	// 4. broadcast new entries
+	// broadcast new entries
 	r.bcastAppend()
-	// 5. persist to storage?
 }
 
 // handleAppendEntries handles AppendEntries RPC request
 // called by follower & candidate
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-
-	// fmt.Printf("In handleAppendEntries of r.id = %d for m.Logterm = %d m.Index = %d\n", r.id, m.LogTerm, m.Index)
 
 	if m.Term < r.Term {
 		return
@@ -882,8 +830,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.msgs = append(r.msgs, m)
 		return
 	}
-
-	// fmt.Printf("at 1\n")
 
 	// assume incoming messages of lower term handled in Step()
 	// change candidate to follower if someone else has won the election
@@ -923,8 +869,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
         return
     }
 
-	// fmt.Printf("at 2\n")
-
 	// sort entries
 	sort.Slice(m.Entries, func(i, j int) bool {
 		return m.Entries[i].Index < m.Entries[j].Index
@@ -940,12 +884,8 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		// save current log array index (NOT actual log position)
 		logIdx := mEntry.Index - offset
 
-		// fmt.Printf("\tlogIdx : %d\n", logIdx)
-
 		// case when they still overlap
 		if logIdx < raftlogEntriesLen {
-
-			// fmt.Printf("at 3\n")
 
 			// and something doesn't match, start appending from here
 			if r.RaftLog.entries[logIdx].EntryType != mEntry.EntryType ||
@@ -967,14 +907,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
                 break
 			}
 		} else if logIdx == raftlogEntriesLen { // new entry just at the end of old entries
-
-			// fmt.Printf("at 4\n")
-			
+		
 			for j := i; j < len(m.Entries); j++ {
-				// fmt.Printf("\tr.RaftLog.entries length before = %d\n", len(r.RaftLog.entries))
 				r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
-				// fmt.Printf("\tappended entry Index : %d Term : %d\n", m.Entries[j].Index, m.Entries[j].Term)
-				// fmt.Printf("\tr.RaftLog.entries length after  = %d\n", len(r.RaftLog.entries))
 			}
 			break
 		} else { // there is a gap, reject with Index = last index
@@ -990,8 +925,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 	}
 
-	// fmt.Printf("at 5\n")
-
 	// if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if m.Commit > r.RaftLog.committed {
 		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
@@ -1000,8 +933,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		if m.Entries == nil {
 			r.RaftLog.committed = min(m.Commit, m.Index)
 		}
-
-		// fmt.Printf("\tm.Commit : %d, local LastIndex() : %d, commit update to %d\n", m.Commit, r.RaftLog.LastIndex(), r.RaftLog.committed)
 	}
 	// done
 	r.msgs = append(r.msgs, pb.Message{
@@ -1019,7 +950,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 	// update nextindex and matchindex for follower
 	// >> progress struct Prs map[uint64]*Progress
 
-	// fmt.Printf("In handleAppendEntriesResponse of r : %d for response from %d, reject = %t Index = %d commit = %d\n", r.id, m.From, m.Reject, m.Index, r.RaftLog.committed)
 	if r.id != r.Lead {
 		panic("Non-leader handling appendEntriesResponse")
 	}
@@ -1031,7 +961,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 
 	// if accepted, update r.Prs, committed, and send update to everyone
 	if m.Reject == false {
-		// fmt.Printf("\tMatch updated to %d, Next %d\n", m.Index, m.Index+1)
 		// only update committed if the last entry replicated belongs to the current term
 		mIndexTerm, err := r.RaftLog.Term(uint64(m.Index))
 		if err != nil {
@@ -1045,10 +974,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 					count++
 				}
 			}
-			// plus the leader himself
-			// count++ 
-			// fmt.Printf("\t%d peers including self has commit >= %d\n", count, m.Index)
-			// fmt.Printf("\told commit = %d ", r.RaftLog.committed)
 
 			// if count is a majority and has increased, update committed and tell everyone
 			if count >= len(r.Prs)/2 + 1 && r.RaftLog.committed < m.Index {
@@ -1056,7 +981,6 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 				r.bcastAppend()
 			}
 		}
-		// fmt.Printf("r.RaftLog.committed updated to %d\n", r.RaftLog.committed)
 	} else {
 		// if rejected decrement nextIndex and retry
 		// this means that the reply needs to carry the same entries as the request? Only if rejected? No because leader has raw info.
@@ -1107,12 +1031,9 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 
 	// update committed and apply if m.Index > r.RaftLog.committed 
-	// fmt.Printf("m.Index = %d, r.RaftLog.committed = %d\n", m.Index, r.RaftLog.committed)
 	if m.Index > r.RaftLog.committed {
 		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
-		// apply r.RaftLog.entries[applied+1 : committed+1]
 	}
-	// fmt.Printf("m.Index = %d, r.RaftLog.committed = %d\n", m.Index, r.RaftLog.committed)
 
 	// return
 	// if candidate use incoming term, don't update their term
@@ -1132,13 +1053,6 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	// TestCommitWithHeartbeat tests leader can send log
 	// to follower when it received a heartbeat response
 	// which indicate it doesn't have update-to-date log
-
-	// if r.id != r.Lead {
-	// 	panic("Non-leader handling heartbeatresponse")
-	// }?
-
-	// r.Prs[m.From].Match = m.Index ?
-	// r.Prs[m.From].Next = m.Index + 1
 
 	if r.State == StateLeader && m.Index < r.RaftLog.LastIndex() {
 		r.sendAppend(m.From)

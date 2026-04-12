@@ -63,7 +63,6 @@ func TestProgressLeader2AB(t *testing.T) {
 	// Send proposals to r1. The first 5 entries should be appended to the log.
 	propMsg := pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("foo")}}}
 	for i := 0; i < 5; i++ {
-		// fmt.Printf("In loop %d:\n", i)
 		if pr := r.Prs[r.id]; pr.Match != uint64(i+1) || pr.Next != pr.Match+1 {
 			t.Errorf("unexpected progress %v", pr)
 		}
@@ -593,7 +592,6 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		// fmt.Printf("In loop %d :\n", i)
 		storage := NewMemoryStorage()
 		storage.Append([]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}})
 		sm := newTestRaft(1, []uint64{1}, 10, 1, storage)
@@ -660,7 +658,6 @@ func TestRecvMessageType_MsgRequestVote2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		// fmt.Printf("In loop %d:\n", i)
 		sm := newTestRaft(1, []uint64{1, 2}, 10, 1, NewMemoryStorage())
 		sm.State = tt.state
 		sm.Vote = tt.voteFor
@@ -713,7 +710,6 @@ func TestAllServerStepdown2AB(t *testing.T) {
 	tterm := uint64(3)
 
 	for i, tt := range tests {
-		// fmt.Printf("In loop %d:\n", i)
 		sm := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 		switch tt.state {
 		case StateFollower:
@@ -726,8 +722,6 @@ func TestAllServerStepdown2AB(t *testing.T) {
 		}
 
 		for j, msgType := range tmsgTypes {
-			// fmt.Printf("\tmsgType: %v\n", msgType)
-			// fmt.Printf("\tsm.Term: %d\n", sm.Term)
 			sm.Step(pb.Message{From: 2, MsgType: msgType, Term: tterm, LogTerm: tterm})
 
 			if sm.State != tt.wstate {
@@ -1636,17 +1630,11 @@ func newNetworkWithConfig(configFunc func(*Config), peers ...stateMachine) *netw
 }
 
 func (nw *network) send(msgs ...pb.Message) {
-	// var i uint64
 	for len(msgs) > 0 {
-		// fmt.Printf("In nw.send(msgs) loop %d:\n", i)
-		// fmt.Printf("\t%d msgs remaining: \n", len(msgs))
 		m := msgs[0]
-		// fmt.Printf("\tcurrent message from : %d, to : %d, MsgType : %v\n", m.From, m.To, m.MsgType,)
 		p := nw.peers[m.To] 
-		// fmt.Printf("\thandled by %d : \n", p)
 		p.Step(m)
 		msgs = append(msgs[1:], nw.filter(p.readMessages())...)
-		// i++
 	}
 }
 

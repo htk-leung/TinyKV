@@ -43,6 +43,108 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
+		/* 
+			type Ready struct {
+				*SoftState
+				pb.HardState
+				Entries []pb.Entry
+				Snapshot pb.Snapshot
+				CommittedEntries []pb.Entry
+				// Messages specifies outbound messages to be sent AFTER Entries are
+				// committed to stable storage.
+				// If it contains a MessageType_MsgSnapshot message, the application MUST report back to raft
+				// when the snapshot has been received or has failed by calling ReportSnapshot.
+				Messages []pb.Message
+			}
+		*/
+	// if has Ready
+	if d.peer.RaftGroup.HasReady() {
+		// get ready from node
+		rd := d.peer.RaftGroup.Ready()
+		// save hardstate + entries & apply snapshot to storage
+		result, err := d.peer.peerStorage.SaveReadyState(rd)
+		if err != nil {
+			panic(err)
+		}
+		// send message
+		d.peer.Send(d.ctx.trans, rd.Messages)
+
+		// handle committed entries && proposal callbacks
+		kvWB := new(engine_util.WriteBatch)
+		for _, rawEntry := range rd.CommittedEntries {
+			// unmarshal data
+			var entry raft_cmdpb.RaftCmdRequest
+			err := entry.Unmarshal(rawEntry.Data)
+			if err != nil {
+				panic(err)
+			}
+
+			// for each request in the entry apply entry & get response
+			var responses []*raft_cmdpb.Response
+			for _, req := range entry.Requests {
+				switch req.CmdType {
+				// case put >> each entry can have multiple reqs
+				case raft_cmdpb.CmdType_Put:
+					// add to kvWB
+					kvWB.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
+					// append resp
+					responses = append(responses, &raft_cmdpb.Response{
+						CmdType:	raft_cmdpb.CmdType_Put,
+						Put:		&raft_cmdpb.PutResponse{},
+					})
+				// case delete >> each entry can have multiple reqs
+				case raft_cmdpb.CmdType_Delete:
+					// add to kvWB
+					kvWB.DeleteCF(req.Delete.Cf, req.Delete.Key)
+					// append resp
+					responses = append(responses, &raft_cmdpb.Response{
+						CmdType:	raft_cmdpb.CmdType_Delete,
+						Delete:		&raft_cmdpb.DeleteResponse{},
+					})
+				// case reader >> each entry only has 1 req, return directly
+				case raft_cmdpb.CmdType_Snap:
+					// only apply if is proposer
+					// set entry cb.txn
+					if len(d.peer.proposals) > 0 {
+						proposal := d.peer.proposals[0]
+						if rawEntry.Term == proposal.term && rawEntry.Index == proposal.index {
+							proposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)  // set txn on cb directly
+							responses = append(responses, &raft_cmdpb.Response{
+								CmdType:	raft_cmdpb.CmdType_Snap,
+								Snap:		&raft_cmdpb.SnapResponse{
+									Region: d.Region(),
+							}})
+						}
+					}
+				}
+			}
+			// if matches proposal then send callback
+			if len(d.peer.proposals) > 0 {
+				proposal := d.peer.proposals[0]
+				if rawEntry.Term == proposal.term && rawEntry.Index == proposal.index {
+					// save response to rcr.Responses
+					proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
+						Header: 		&raft_cmdpb.RaftRequestHeader{},
+						Responses: 		responses,
+					})
+					// truncate proposal
+					d.peer.proposals = d.peer.proposals[1:]
+				}
+			}
+		}
+		// update d.peer.peerStorage.applyState and add to kvWB
+		if len(rd.CommittedEntries) > 0 {
+			d.peer.peerStorage.applyState.AppliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+			kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), &d.peer.peerStorage.applyState)
+		}
+
+		// write to db, function already checks for entries len
+		kvWB.MustWriteToDB(d.ctx.engine.Kv)
+
+		// call advance from node
+		d.peer.RaftGroup.Advance(rd)
+	}
+	return
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -114,6 +216,27 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+
+	// marshal request
+	data, err := msg.Marshal()
+	if err != nil {
+		cb.Done(ErrResp(err))
+		return
+	}
+	// use rawnode propose function
+	err = d.peer.RaftGroup.Propose(data)
+	if err != nil {
+		cb.Done(ErrResp(err))
+		return
+	}
+	// create new proposal struct in peer to record entry callback
+	// used in handle ready to issue callback for successful proposals
+	// only failures returned in proposeRaftCmd
+	d.peer.proposals = append(d.peer.proposals, raftstore.proposal{
+		index:	d.peer.nextProposalIndex(),
+		term:	d.peer.Term(),
+		cb:		cb,
+	})
 }
 
 func (d *peerMsgHandler) onTick() {
