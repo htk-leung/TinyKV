@@ -318,7 +318,10 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	// existing entries with index >= incoming min will never be committed
 	// check existing last index, if >= incoming min, delete
 	incomingMinInd := entries[0].Index
-	existingMaxInd := ps.LastIndex()
+	existingMaxInd, err := ps.LastIndex()
+	if err != nil {
+		return err
+	}
 	regionID := ps.region.Id
 
 	if incomingMinInd <= existingMaxInd {
@@ -335,7 +338,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	// update raftstate and add to wb
 	ps.raftState.LastIndex = entries[len(entries)-1].Index
 	ps.raftState.LastTerm = entries[len(entries)-1].Term
-	raftWB.SetMeta(meta.RaftStateKey(regionID), &ps.raftState)
+	raftWB.SetMeta(meta.RaftStateKey(regionID), ps.raftState)
 	
 	return nil
 }
@@ -367,11 +370,11 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	raftWB := new(engine_util.WriteBatch)
 
 	// hardstate handling if not empty
-	if !isEmptyHardState(ready.HardState) {
+	if !raft.IsEmptyHardState(ready.HardState) {
 		// update PeerStorage's hardstate
-		ps.raftState.HardState = ready.HardState
+		ps.raftState.HardState = &ready.HardState
 		// add Hardstate to entries
-		raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), &ps.raftState)
+		raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState)
 	}
 
 	// call append with new entries + update

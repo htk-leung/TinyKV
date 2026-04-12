@@ -15,6 +15,9 @@ import (
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/btree"
 	"github.com/pingcap/errors"
+
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 )
 
 type PeerTick int
@@ -62,7 +65,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		// get ready from node
 		rd := d.peer.RaftGroup.Ready()
 		// save hardstate + entries & apply snapshot to storage
-		result, err := d.peer.peerStorage.SaveReadyState(rd)
+		_, err := d.peer.peerStorage.SaveReadyState(&rd)
 		if err != nil {
 			panic(err)
 		}
@@ -71,6 +74,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 		// handle committed entries && proposal callbacks
 		kvWB := new(engine_util.WriteBatch)
+		var allResponses [][]*raft_cmdpb.Response
 		for _, rawEntry := range rd.CommittedEntries {
 			// unmarshal data
 			var entry raft_cmdpb.RaftCmdRequest
@@ -103,12 +107,13 @@ func (d *peerMsgHandler) HandleRaftReady() {
 					})
 				// case reader >> each entry only has 1 req, return directly
 				case raft_cmdpb.CmdType_Snap:
-					// only apply if is proposer
-					// set entry cb.txn
+					// apply only if is proposer
 					if len(d.peer.proposals) > 0 {
 						proposal := d.peer.proposals[0]
 						if rawEntry.Term == proposal.term && rawEntry.Index == proposal.index {
-							proposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)  // set txn on cb directly
+							// set txn on cb directly
+							proposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)  
+							// append resp
 							responses = append(responses, &raft_cmdpb.Response{
 								CmdType:	raft_cmdpb.CmdType_Snap,
 								Snap:		&raft_cmdpb.SnapResponse{
@@ -118,28 +123,33 @@ func (d *peerMsgHandler) HandleRaftReady() {
 					}
 				}
 			}
-			// if matches proposal then send callback
-			if len(d.peer.proposals) > 0 {
-				proposal := d.peer.proposals[0]
-				if rawEntry.Term == proposal.term && rawEntry.Index == proposal.index {
-					// save response to rcr.Responses
-					proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
-						Header: 		&raft_cmdpb.RaftRequestHeader{},
-						Responses: 		responses,
-					})
-					// truncate proposal
-					d.peer.proposals = d.peer.proposals[1:]
-				}
-			}
+			// save responses for this commit entry
+			allResponses = append(allResponses, responses)
 		}
 		// update d.peer.peerStorage.applyState and add to kvWB
 		if len(rd.CommittedEntries) > 0 {
 			d.peer.peerStorage.applyState.AppliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
-			kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), &d.peer.peerStorage.applyState)
+			kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), d.peer.peerStorage.applyState)
 		}
-
 		// write to db, function already checks for entries len
 		kvWB.MustWriteToDB(d.ctx.engine.Kv)
+
+		// callbacks for each CommittedEntries - only needed if proposed locally
+		for i, entry := range rd.CommittedEntries {
+			if len(d.peer.proposals) == 0 { break }
+			// if matches proposal then send callback
+			proposal := d.peer.proposals[0]
+			responses := allResponses[i]
+			if entry.Term == proposal.term && entry.Index == proposal.index {
+				// save response to rcr.Responses
+				proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
+					Header: 		&raft_cmdpb.RaftResponseHeader{},
+					Responses: 		responses,
+				})
+				// truncate proposal
+				d.peer.proposals = d.peer.proposals[1:]
+			}
+		}
 
 		// call advance from node
 		d.peer.RaftGroup.Advance(rd)
@@ -232,7 +242,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	// create new proposal struct in peer to record entry callback
 	// used in handle ready to issue callback for successful proposals
 	// only failures returned in proposeRaftCmd
-	d.peer.proposals = append(d.peer.proposals, raftstore.proposal{
+	d.peer.proposals = append(d.peer.proposals, &proposal{
 		index:	d.peer.nextProposalIndex(),
 		term:	d.peer.Term(),
 		cb:		cb,

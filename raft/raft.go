@@ -17,11 +17,12 @@ package raft
 import (
 	"errors"
 	"bytes"
-	"math"
 	"fmt"
 	"sort"
+	"math/rand"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/pingcap-incubator/tinykv/log"
 )
 
 // None is a placeholder node ID used when there is no leader.
@@ -138,7 +139,8 @@ type Raft struct {
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
-	electionTimeout int
+	baseElectionTimeout int
+	electionTimeout int // actual timeout used
 	// number of ticks since it reached last heartbeatTimeout.
 	// only leader keeps heartbeatElapsed.
 	heartbeatElapsed int
@@ -163,8 +165,13 @@ type Raft struct {
 	PendingConfIndex uint64
 }
 
+// randomize election timeout
+func (r *Raft) getRandElectionTimeout() int {
+	// gives range [electionTimeout, 2*electionTimeout)
+    return r.baseElectionTimeout + rand.Intn(r.baseElectionTimeout)
+}
+
 // newRaft return a raft peer with the given config
-// V
 func newRaft(c *Config) *Raft {
 	// DUMMY PRINT
 	fmt.Printf("")
@@ -198,7 +205,8 @@ func newRaft(c *Config) *Raft {
 		msgs:				make([]pb.Message, 0),	
 		Lead:				0,
 		heartbeatTimeout:	c.HeartbeatTick,
-		electionTimeout:	c.ElectionTick,
+		baseElectionTimeout:c.ElectionTick,
+		electionTimeout:	c.ElectionTick + rand.Intn(c.ElectionTick),
 		heartbeatElapsed:	0,
 		electionElapsed :	0,
 		leadTransferee:		0,
@@ -218,16 +226,12 @@ func (r *Raft) tick() {
 		// if times up
 		if r.heartbeatElapsed >= r.heartbeatTimeout {
 			// send heartbeat by sending self
-			r.heartbeatElapsed++
-			if r.heartbeatElapsed >= r.heartbeatTimeout {
-				r.heartbeatElapsed = 0  // Reset after timeout
-				r.Step(pb.Message{
-					MsgType: pb.MessageType_MsgBeat,
-					From: r.id, 
-					To: r.id, 
-				})
-			}
-			return
+			r.heartbeatElapsed = 0  // Reset after timeout
+			r.Step(pb.Message{
+				MsgType: pb.MessageType_MsgBeat,
+				From: r.id, 
+				To: r.id, 
+			})
 		}
 		return
 	}
@@ -241,12 +245,7 @@ func (r *Raft) tick() {
 			From: r.id, 
 			Term: r.Term,
 		})
-		r.electionTimeout += int(float64(r.id) * (math.Pow(2, float64(r.id) - 1)))
-		// how to reset?
-		// if r.electionTimeout > 500 {
-		// 	r.electionTimeout = r.electionTimeout % r.electionTimeoutInit + r.electionTimeoutInit
-		// }
-		// r.electionTimeout = len(r.Prs) + rand.Intn(len(r.Prs)*2)
+		r.electionTimeout = r.getRandElectionTimeout()
     }
 }
 
@@ -276,6 +275,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Vote = 0
 	r.votes = make(map[uint64]bool) // when leader/candidates become followers a new term started >> don't casually call becomeFollower
 	r.electionElapsed = 0
+	r.electionTimeout = r.getRandElectionTimeout()
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -292,6 +292,7 @@ func (r *Raft) becomeCandidate() {
 	r.votes[r.id] = true
 	// reset electionTimeout
 	r.electionElapsed = 0
+	r.electionTimeout = r.getRandElectionTimeout()
 
 	// edge case : self is the only member! must count your own vote and become leader here
 	if len(r.Prs) == 1 {
@@ -304,7 +305,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-
+	log.Infof("[%d] became leader, term=%d", r.id, r.Term)
 	// update state
 	r.State = StateLeader
 	r.Vote = 0
@@ -494,7 +495,7 @@ func (r *Raft) campaign(m pb.Message) {
 	lastLogIndex	index of candidate’s last log entry (§5.4)
 	lastLogTerm		term of candidate’s last log entry (§5.4)
 	*/
-
+	log.Infof("[%d] starting election, term=%d", r.id, r.Term+1)
 	// node becomes candidate
 	r.becomeCandidate()
 
@@ -637,7 +638,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		- if candidate receives majority of votes of denials, it
 			- reverts back to follower.
 	*/
-
+	
 	// save response to map
 	r.votes[m.From] = !m.Reject // when becomes leader clear slice
 
@@ -651,6 +652,8 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 	}
 	votedAgainst = len(r.votes) - votedFor
+
+	log.Infof("[%d] got vote from %d, reject=%v, votedFor=%d", r.id, m.From, m.Reject, votedFor)
 
 	if votedFor >= quorum {
 		r.becomeLeader()
@@ -675,10 +678,6 @@ func (r *Raft) AppendEntries(entries []*pb.Entry) {
 	r.Prs[r.id].Next = r.Prs[r.id].Match + 1
 
 	// persisting to memory is in the ready() part of raft, not here
-	// // save to storage
-	// r.RaftLog.storage.Append(entries)
-	// // then update applied & stabled
-	// r.RaftLog.stabled += len(entries)
 }
 
 // broadcast append
@@ -791,10 +790,6 @@ func (r *Raft) handlePropose(m pb.Message) {
 	// Your Code Here (2A).
 
 	// becomefollower if someone else has higher term
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, m.From)
-		return
-	}
 	if r.State != StateLeader { 
 		panic("Non-leader receiving MsgPropose\n")
 	} 
@@ -924,6 +919,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			return
 		}
 	}
+	fmt.Printf("in raft.handleAppendEntries: raftlog entries len = %d", len(r.RaftLog.entries))
 
 	// if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if m.Commit > r.RaftLog.committed {

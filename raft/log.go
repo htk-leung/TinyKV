@@ -92,6 +92,12 @@ func newLog(storage Storage) *RaftLog {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	// Get the term for the dummy entry 
+	dummyTerm, err := storage.Term(firstIndex - 1)
+	if err != nil {
+		dummyTerm = 0  // If we can't get it, use 0
+	}
 	// entries never returns the dummy entry
 	// entriesLastInd + 1 because ents[hi] is excluded from slice being returned
 	// only fetch entries if there are any
@@ -104,19 +110,13 @@ func newLog(storage Storage) *RaftLog {
             panic(err.Error())
         }
         
-        // Get the term for the dummy entry 
-        dummyTerm, err := storage.Term(firstIndex - 1)
-        if err != nil {
-            dummyTerm = 0  // If we can't get it, use 0
-        }
-        
         // Create entries with dummy entry at position 0
         entries = make([]pb.Entry, 0, len(storageEntries)+1)
         entries = append(entries, pb.Entry{Term: dummyTerm, Index: firstIndex - 1})
         entries = append(entries, storageEntries...)
     } else {
-        // No entries in storage, just create dummy at index 0
-        entries = []pb.Entry{{Term: 0, Index: 0}}
+        // No entries in storage, just create dummy at index of first entry
+        entries = []pb.Entry{{Term: dummyTerm, Index: firstIndex - 1}}
     }
 
 	return &RaftLog{
