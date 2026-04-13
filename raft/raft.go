@@ -180,18 +180,24 @@ func newRaft(c *Config) *Raft {
 	}
 
 	// Your Code Here (2A).
-	prs := make(map[uint64]*Progress)
-	for _, p := range c.peers {
-		prs[p] = &Progress{
-			Match:	0,
-			Next:	1,
-		}
-	}
-	
 	log := newLog(c.Storage)
 	log.applied = c.Applied
 
-	hardstate, _, _ := c.Storage.InitialState() // error is always nil
+	hardstate, confstate, _ := c.Storage.InitialState() // error is always nil
+
+	prs := make(map[uint64]*Progress)
+	var configpeers []uint64
+	if len(c.peers) > 0 {
+		configpeers = c.peers
+	} else {
+		configpeers = confstate.Nodes
+	}
+	for _, p := range configpeers {
+		prs[p] = &Progress{
+			Match:	0,
+			Next:	log.LastIndex() + 1,
+		}
+	}
 
 	// Your Code Here (2A).
 	return &Raft{
@@ -518,6 +524,7 @@ func (r *Raft) campaign(m pb.Message) {
 			})
 		}
 	}
+	log.Infof("[%d] messages appended, len=%d", r.id, len(r.msgs))
 }
 func (r *Raft) clHandleRequestVote(m pb.Message) {
 	/* from raft/doc.go
@@ -652,8 +659,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 	}
 	votedAgainst = len(r.votes) - votedFor
-
-	log.Infof("[%d] got vote from %d, reject=%v, votedFor=%d", r.id, m.From, m.Reject, votedFor)
+	log.Infof("[%d] votes: for=%d against=%d quorum=%d", r.id, votedFor, votedAgainst, quorum)
 
 	if votedFor >= quorum {
 		r.becomeLeader()
