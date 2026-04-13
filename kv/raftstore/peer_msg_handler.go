@@ -62,6 +62,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		*/
 	// if has Ready
 	if d.peer.RaftGroup.HasReady() {
+		
 		// get ready from node
 		rd := d.peer.RaftGroup.Ready()
 		// save hardstate + entries & apply snapshot to storage
@@ -76,6 +77,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		kvWB := new(engine_util.WriteBatch)
 		var allResponses [][]*raft_cmdpb.Response
 		for _, rawEntry := range rd.CommittedEntries {
+			// log.Infof("[region %d] processing committed entry [%d] index=%d term=%d", 
+        	// 	d.regionId, i, rawEntry.Index, rawEntry.Term)
 			// unmarshal data
 			var entry raft_cmdpb.RaftCmdRequest
 			err := entry.Unmarshal(rawEntry.Data)
@@ -123,6 +126,11 @@ func (d *peerMsgHandler) HandleRaftReady() {
 					}
 				}
 			}
+			// if len(d.proposals) > 0 {
+			// 	proposal := d.proposals[0]
+			// 	log.Infof("[region %d] proposal index=%d term=%d, entry index=%d term=%d",
+			// 		d.regionId, proposal.index, proposal.term, rawEntry.Index, rawEntry.Term)
+			// }
 			// save responses for this commit entry
 			allResponses = append(allResponses, responses)
 		}
@@ -142,6 +150,8 @@ func (d *peerMsgHandler) HandleRaftReady() {
 			responses := allResponses[i]
 			if entry.Term == proposal.term && entry.Index == proposal.index {
 				// save response to rcr.Responses
+				// log.Infof("[region %d] callback for proposal [%d] index=%d term=%d, entry index=%d term=%d",
+            	// 	d.regionId, i, proposal.index, proposal.term, entry.Index, entry.Term)
 				proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
 					Header: 		&raft_cmdpb.RaftResponseHeader{},
 					Responses: 		responses,
@@ -233,6 +243,8 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb.Done(ErrResp(err))
 		return
 	}
+	// save idx
+	proposalIndex := d.peer.nextProposalIndex()
 	// use rawnode propose function
 	err = d.peer.RaftGroup.Propose(data)
 	if err != nil {
@@ -243,7 +255,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	// used in handle ready to issue callback for successful proposals
 	// only failures returned in proposeRaftCmd
 	d.peer.proposals = append(d.peer.proposals, &proposal{
-		index:	d.peer.nextProposalIndex(),
+		index:	proposalIndex,
 		term:	d.peer.Term(),
 		cb:		cb,
 	})
@@ -390,11 +402,11 @@ func (d *peerMsgHandler) checkMessage(msg *rspb.RaftMessage) bool {
 	}
 	target := msg.GetToPeer()
 	if target.Id < d.PeerId() {
-		log.Infof("%s target peer ID %d is less than %d, msg maybe stale", d.Tag, target.Id, d.PeerId())
+		// log.Infof("%s target peer ID %d is less than %d, msg maybe stale", d.Tag, target.Id, d.PeerId())
 		return true
 	} else if target.Id > d.PeerId() {
 		if d.MaybeDestroy() {
-			log.Infof("%s is stale as received a larger peer %s, destroying", d.Tag, target)
+			// log.Infof("%s is stale as received a larger peer %s, destroying", d.Tag, target)
 			d.destroyPeer()
 			d.ctx.router.sendStore(message.NewMsg(message.MsgTypeStoreRaftMessage, msg))
 		}

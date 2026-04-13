@@ -22,7 +22,7 @@ import (
 	"math/rand"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
-	"github.com/pingcap-incubator/tinykv/log"
+	// "github.com/pingcap-incubator/tinykv/log"
 )
 
 // None is a placeholder node ID used when there is no leader.
@@ -194,7 +194,7 @@ func newRaft(c *Config) *Raft {
 	}
 	for _, p := range configpeers {
 		prs[p] = &Progress{
-			Match:	0,
+			Match:	log.LastIndex(),
 			Next:	log.LastIndex() + 1,
 		}
 	}
@@ -311,7 +311,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Infof("[%d] became leader, term=%d", r.id, r.Term)
+	// log.Infof("[%d] became leader, term=%d", r.id, r.Term)
 	// update state
 	r.State = StateLeader
 	r.Vote = 0
@@ -501,7 +501,7 @@ func (r *Raft) campaign(m pb.Message) {
 	lastLogIndex	index of candidate’s last log entry (§5.4)
 	lastLogTerm		term of candidate’s last log entry (§5.4)
 	*/
-	log.Infof("[%d] starting election, term=%d", r.id, r.Term+1)
+	// log.Infof("[%d] starting election, term=%d", r.id, r.Term+1)
 	// node becomes candidate
 	r.becomeCandidate()
 
@@ -524,7 +524,7 @@ func (r *Raft) campaign(m pb.Message) {
 			})
 		}
 	}
-	log.Infof("[%d] messages appended, len=%d", r.id, len(r.msgs))
+	// log.Infof("[%d] messages appended, len=%d", r.id, len(r.msgs))
 }
 func (r *Raft) clHandleRequestVote(m pb.Message) {
 	/* from raft/doc.go
@@ -659,7 +659,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 	}
 	votedAgainst = len(r.votes) - votedFor
-	log.Infof("[%d] votes: for=%d against=%d quorum=%d", r.id, votedFor, votedAgainst, quorum)
+	// log.Infof("[%d] votes: for=%d against=%d quorum=%d", r.id, votedFor, votedAgainst, quorum)
 
 	if votedFor >= quorum {
 		r.becomeLeader()
@@ -760,12 +760,11 @@ func (r *Raft) sendAppend(to uint64) bool {
 	offset :=  r.RaftLog.entries[0].Index
 	prevLogEntry := r.RaftLog.entries[r.Prs[to].Match-offset]
 
-	if uint64(len(r.RaftLog.entries)) + offset > r.Prs[to].Match { // if there are things to send
+	if r.RaftLog.LastIndex() > r.Prs[to].Match { // if there are things to send
 		entriesptrs := make([]*pb.Entry, 0)
-		for i := range r.RaftLog.entries[r.Prs[to].Next : ] {
-			entriesptrs = append(entriesptrs, &r.RaftLog.entries[r.Prs[to].Next + uint64(i)])
+		for i := range r.RaftLog.entries[r.Prs[to].Next - offset : ] {
+			entriesptrs = append(entriesptrs, &r.RaftLog.entries[r.Prs[to].Next + uint64(i) - offset])
 		}
-
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: 	pb.MessageType_MsgAppend,
 			To:      	to,
@@ -787,7 +786,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 			Commit:  	r.RaftLog.committed,
 		})
 	}
-
 	return true
 }
 
