@@ -46,23 +46,9 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
-		/* 
-			type Ready struct {
-				*SoftState
-				pb.HardState
-				Entries []pb.Entry
-				Snapshot pb.Snapshot
-				CommittedEntries []pb.Entry
-				// Messages specifies outbound messages to be sent AFTER Entries are
-				// committed to stable storage.
-				// If it contains a MessageType_MsgSnapshot message, the application MUST report back to raft
-				// when the snapshot has been received or has failed by calling ReportSnapshot.
-				Messages []pb.Message
-			}
-		*/
+
 	// if has Ready
 	if d.peer.RaftGroup.HasReady() {
-		
 		// get ready from node
 		rd := d.peer.RaftGroup.Ready()
 		// save hardstate + entries & apply snapshot to storage
@@ -70,71 +56,48 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		if err != nil {
 			panic(err)
 		}
-		// send message
+		// truncate 
+		// send messages in ready
 		d.peer.Send(d.ctx.trans, rd.Messages)
+
+		// drain stale proposals
+		if len(rd.CommittedEntries) > 0 {
+			d.DrainStaleProposals(rd.CommittedEntries[0])
+		}
 
 		// handle committed entries && proposal callbacks
 		kvWB := new(engine_util.WriteBatch)
-		var allResponses [][]*raft_cmdpb.Response
+		type entryResult struct {
+			entry     eraftpb.Entry
+			responses []*raft_cmdpb.Response
+		}
+		var results []entryResult
+
 		for _, rawEntry := range rd.CommittedEntries {
 			// log.Infof("[region %d] processing committed entry [%d] index=%d term=%d", 
         	// 	d.regionId, i, rawEntry.Index, rawEntry.Term)
+
+			// IF NOOP		: 
+			if len(rawEntry.Data) == 0 {
+				continue
+			}
+
 			// unmarshal data
-			var entry raft_cmdpb.RaftCmdRequest
-			err := entry.Unmarshal(rawEntry.Data)
-			if err != nil {
+			entry := &raft_cmdpb.RaftCmdRequest{}
+			if err := entry.Unmarshal(rawEntry.Data); err != nil {
 				panic(err)
 			}
 
-			// for each request in the entry apply entry & get response
-			var responses []*raft_cmdpb.Response
-			for _, req := range entry.Requests {
-				switch req.CmdType {
-				// case put >> each entry can have multiple reqs
-				case raft_cmdpb.CmdType_Put:
-					// add to kvWB
-					kvWB.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
-					// append resp
-					responses = append(responses, &raft_cmdpb.Response{
-						CmdType:	raft_cmdpb.CmdType_Put,
-						Put:		&raft_cmdpb.PutResponse{},
-					})
-				// case delete >> each entry can have multiple reqs
-				case raft_cmdpb.CmdType_Delete:
-					// add to kvWB
-					kvWB.DeleteCF(req.Delete.Cf, req.Delete.Key)
-					// append resp
-					responses = append(responses, &raft_cmdpb.Response{
-						CmdType:	raft_cmdpb.CmdType_Delete,
-						Delete:		&raft_cmdpb.DeleteResponse{},
-					})
-				// case reader >> each entry only has 1 req, return directly
-				case raft_cmdpb.CmdType_Snap:
-					// apply only if is proposer
-					if len(d.peer.proposals) > 0 {
-						proposal := d.peer.proposals[0]
-						if rawEntry.Term == proposal.term && rawEntry.Index == proposal.index {
-							// set txn on cb directly
-							proposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)  
-							// append resp
-							responses = append(responses, &raft_cmdpb.Response{
-								CmdType:	raft_cmdpb.CmdType_Snap,
-								Snap:		&raft_cmdpb.SnapResponse{
-									Region: d.Region(),
-							}})
-						}
-					}
-				}
+			// IF ADMIN		: 
+			if entry.AdminRequest != nil {
+				d.HandleAdminReq(entry.AdminRequest)
+			} else { // IF REQ 		: 
+				responses := d.HandleReq(kvWB, entry, rawEntry.Term, rawEntry.Index)
+				results = append(results, entryResult{rawEntry, responses})
 			}
-			// if len(d.proposals) > 0 {
-			// 	proposal := d.proposals[0]
-			// 	log.Infof("[region %d] proposal index=%d term=%d, entry index=%d term=%d",
-			// 		d.regionId, proposal.index, proposal.term, rawEntry.Index, rawEntry.Term)
-			// }
-			// save responses for this commit entry
-			allResponses = append(allResponses, responses)
 		}
-		// update d.peer.peerStorage.applyState and add to kvWB
+
+		// update d.peer.peerStorage.applyState
 		if len(rd.CommittedEntries) > 0 {
 			d.peer.peerStorage.applyState.AppliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 			kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), d.peer.peerStorage.applyState)
@@ -143,28 +106,120 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		kvWB.MustWriteToDB(d.ctx.engine.Kv)
 
 		// callbacks for each CommittedEntries - only needed if proposed locally
-		for i, entry := range rd.CommittedEntries {
-			if len(d.peer.proposals) == 0 { break }
+		for _, result := range results {
+			if len(d.peer.proposals) == 0 { 
+				break 
+			}
 			// if matches proposal then send callback
 			proposal := d.peer.proposals[0]
-			responses := allResponses[i]
-			if entry.Term == proposal.term && entry.Index == proposal.index {
-				// save response to rcr.Responses
+			if result.entry.Index == proposal.index {
 				// log.Infof("[region %d] callback for proposal [%d] index=%d term=%d, entry index=%d term=%d",
-            	// 	d.regionId, i, proposal.index, proposal.term, entry.Index, entry.Term)
-				proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
-					Header: 		&raft_cmdpb.RaftResponseHeader{},
-					Responses: 		responses,
-				})
+            	// 	d.regionId, i, proposal.index, proposal.term, rawEntry.Index, rawEntry.Term)
+				
+				if result.entry.Term == proposal.term {
+					proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
+						Header: 		&raft_cmdpb.RaftResponseHeader{},
+						Responses: 		result.responses,
+					})
+				} else {
+					proposal.cb.Done(ErrRespStaleCommand(result.entry.Term))
+				}
 				// truncate proposal
 				d.peer.proposals = d.peer.proposals[1:]
 			}
 		}
 
+
+
 		// call advance from node
 		d.peer.RaftGroup.Advance(rd)
 	}
 	return
+}
+
+func (d *peerMsgHandler) HandleAdminReq(req *raft_cmdpb.AdminRequest) {
+	switch req.CmdType {
+	case raft_cmdpb.AdminCmdType_InvalidAdmin:
+		return
+	case raft_cmdpb.AdminCmdType_ChangePeer:
+		return
+	case raft_cmdpb.AdminCmdType_CompactLog:
+		// schedulecompactlog
+		d.ScheduleCompactLog(req.CompactLog.CompactIndex)
+		// update raftapplystate
+		d.peer.peerStorage.applyState.TruncatedState = &eraftpb.RaftTruncatedState{
+			Index	: req.CompactLog.CompactIndex,
+			Term	: req.CompactLog.CompactTerm,
+		}
+		// snapshot???
+	case raft_cmdpb.AdminCmdType_TransferLeader:
+		return
+	case raft_cmdpb.AdminCmdType_Split:
+		return
+	}
+}
+
+func (d *peerMsgHandler) HandleReq(
+	kvWB *engine_util.WriteBatch, 
+	entry *raft_cmdpb.RaftCmdRequest,
+	rawEntryTerm, rawEntryIndex uint64) []*raft_cmdpb.Response 
+{
+	var responses []*raft_cmdpb.Response
+
+	// for each request in the entry apply entry & get response
+	// then save to allResponses
+	for _, req := range entry.Requests {
+		switch req.CmdType {
+		// case put >> each entry can have multiple reqs
+		case raft_cmdpb.CmdType_Put:
+			// add to kvWB
+			kvWB.SetCF(req.Put.Cf, req.Put.Key, req.Put.Value)
+			// append resp
+			responses = append(responses, &raft_cmdpb.Response{
+				CmdType:	raft_cmdpb.CmdType_Put,
+				Put:		&raft_cmdpb.PutResponse{},
+			})
+		// case delete >> each entry can have multiple reqs
+		case raft_cmdpb.CmdType_Delete:
+			// add to kvWB
+			kvWB.DeleteCF(req.Delete.Cf, req.Delete.Key)
+			// append resp
+			responses = append(responses, &raft_cmdpb.Response{
+				CmdType:	raft_cmdpb.CmdType_Delete,
+				Delete:		&raft_cmdpb.DeleteResponse{},
+			})
+		// case reader >> each entry only has 1 req, return directly
+		case raft_cmdpb.CmdType_Snap:
+			// apply only if is proposer
+			if len(d.peer.proposals) > 0 {
+				proposal := d.peer.proposals[0]
+				if rawEntryTerm == proposal.term && rawEntryIndex == proposal.index {
+					// set txn on cb directly
+					proposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)  
+					// append resp
+					responses = append(responses, &raft_cmdpb.Response{
+						CmdType:	raft_cmdpb.CmdType_Snap,
+						Snap:		&raft_cmdpb.SnapResponse{
+							Region: d.Region(),
+					}})
+				}
+			}
+		}
+	}
+	return responses
+}
+
+func (d *peerMsgHandler) DrainStaleProposals(firstEntry eraftpb.Entry) {
+    for len(d.peer.proposals) > 0 {
+        proposal := d.peer.proposals[0]
+        if proposal.term < firstEntry.Term ||
+           (proposal.term == firstEntry.Term && proposal.index < firstEntry.Index) {
+            proposal.cb.Done(ErrRespStaleCommand(firstEntry.Term))
+            d.peer.proposals = d.peer.proposals[1:]
+        } else {
+            break
+        }
+    }
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
