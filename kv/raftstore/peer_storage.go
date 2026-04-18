@@ -355,7 +355,47 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
-	return nil, nil
+
+	// RAM first
+	// update applyState
+	oldTi := ps.applyState.TruncatedIndex
+	ps.applyState = &rspb.RaftApplyState{
+		AppliedIndex:	snapshot.Metadata.Index,
+		TruncatedIndex:	oldTi,
+	}
+	// update RegionLocal state
+	ps.snapState = snap.SnapState{
+		StateType:		snap.SnapState_Applying,
+		Receiver:		make(chan bool, 1)
+	}
+
+	// Badger DBs : remove stale states from db
+	ps.clearMeta(kvWB, raftWB)
+	ps.clearExtraData(snapData.Region)
+
+	// Direct function calls : persist to kvdb, raftdb
+	WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
+	kvWB.SetMeta(meta.ApplyStateKey(snapData.Region.GetId()), ps.applyState)
+
+	// update region
+	applyResult := &ApplySnapResult{
+		PrevRegion: 	ps.region,
+		Region:			snapData.Region,
+	}
+	ps.region = snapData.Region
+
+	// schedule worker to apply snapshot : send runner.RegionTaskApply to region worker
+	// 	throughPeerStorage.regionSched
+	ps.regionSched <- &runner.RegionTaskApply{
+		RegionId: 	snapData.Region.GetId(),
+		Notifier: 	ps.snapState.Receiver,		// when it finishes snapshot applying, it notifies notifier.
+		SnapMeta: 	snapshot.Metadata, 			// the region meta information of the snapshot
+		StartKey: 	snapData.Region.StartKey, 	// `StartKey` and `EndKey` are origin region's range, it's used to clean up certain range of region before applying snapshot.
+		EndKey:   	snapData.Region.EndKey,
+	}
+
+	// return apply result and error
+	return applyResult, nil
 }
 
 // Save memory states to disk.
@@ -364,10 +404,19 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
 
-	// apply snapshot
-
 	// create write batch
 	raftWB := new(engine_util.WriteBatch)
+	kvWB := new(engine_util.WriteBatch)
+
+	// apply snapshot
+	var applyResult *ApplySnapResult
+	if !raft.IsEmptySnapshot(ready.Snapshot) {
+		var err error
+		applyResult, err = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// hardstate handling if not empty
 	if !raft.IsEmptyHardState(ready.HardState) {
@@ -386,8 +435,9 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 
 	// write to db
 	raftWB.MustWriteToDB(ps.Engines.Raft)
+	kvWB.MustWriteToDB(ps.Engines.Kv)
 
-	return nil, nil
+	return applyResult, nil
 }
 
 func (ps *PeerStorage) ClearData() {

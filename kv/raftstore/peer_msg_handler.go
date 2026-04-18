@@ -56,7 +56,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		if err != nil {
 			panic(err)
 		}
-		// truncate 
 		// send messages in ready
 		d.peer.Send(d.ctx.trans, rd.Messages)
 
@@ -128,8 +127,6 @@ func (d *peerMsgHandler) HandleRaftReady() {
 				d.peer.proposals = d.peer.proposals[1:]
 			}
 		}
-
-
 
 		// call advance from node
 		d.peer.RaftGroup.Advance(rd)

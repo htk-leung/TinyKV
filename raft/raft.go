@@ -1062,6 +1062,9 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+
+	// save to raftlog
+	r.RaftLog.pendingSnapshot = m.Snapshot
 }
 
 // addNode add a new node to raft group
