@@ -241,6 +241,10 @@ func (rn *RawNode) Advance(rd Ready) {
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHardState = rd.HardState
 	}
+	// clear pendingsnapshot and apply snapshot to raftlog.storage
+	if !IsEmptySnap(rd.Snapshot) {
+        rn.Raft.RaftLog.pendingSnapshot = nil
+    }
 	// update stabled
 	if len(rd.Entries) > 0 {
 		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
@@ -251,6 +255,8 @@ func (rn *RawNode) Advance(rd Ready) {
 	}
 	// clear messages
 	rn.Raft.msgs = nil
+	// maybeCompact matches raftlog with snapshot
+	rn.Raft.RaftLog.maybeCompact()
 }
 
 // GetProgress return the Progress of this node and its peers, if this

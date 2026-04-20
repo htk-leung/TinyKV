@@ -356,22 +356,40 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 
-	// RAM first
-	// update applyState
-	oldTi := ps.applyState.TruncatedIndex
-	ps.applyState = &rspb.RaftApplyState{
-		AppliedIndex:	snapshot.Metadata.Index,
-		TruncatedIndex:	oldTi,
-	}
-	// update RegionLocal state
-	ps.snapState = snap.SnapState{
-		StateType:		snap.SnapState_Applying,
-		Receiver:		make(chan bool, 1)
-	}
-
 	// Badger DBs : remove stale states from db
 	ps.clearMeta(kvWB, raftWB)
 	ps.clearExtraData(snapData.Region)
+
+	// create notifier to get response from RegionTaskApply
+	notifier := make(chan bool, 1)
+
+	// schedule worker to apply snapshot : send runner.RegionTaskApply to region worker
+	// throughPeerStorage.regionSched
+	ps.regionSched <- &runner.RegionTaskApply{
+		RegionId: 	snapData.Region.GetId(),
+		Notifier: 	notifier,						// when it finishes snapshot applying, it notifies notifier, but WHO? runner.RegionTaskApply himself ref region_task.go:122
+		SnapMeta: 	snapData.GetMeta(), 			// the region meta information of the snapshot
+		StartKey: 	snapData.Region.GetStartKey(), 	// `StartKey` and `EndKey` are origin region's range, it's used to clean up certain range of region before applying snapshot.
+		EndKey:   	snapData.Region.GetEndKey(),
+	}
+
+	// wait for it to finish, only continue updating if successful
+	result := <-notifier
+	if !result {
+		return nil, errors.Errorf("failed to apply snapshot for region %v", snapData.Region.GetId())
+	}
+
+	// update applyState
+	ps.applyState = &rspb.RaftApplyState{
+		AppliedIndex:	snapshot.Metadata.Index,
+		TruncatedIndex:	&rspb.RaftTruncatedState{
+			Index:		snapshot.Metadata.Index,
+			Term:		snapshot.Metadata.Term,
+		},
+	}
+
+	// update RegionLocal statetype
+	ps.snapState.StateType = snap.SnapState_Applying
 
 	// Direct function calls : persist to kvdb, raftdb
 	WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
@@ -383,16 +401,6 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		Region:			snapData.Region,
 	}
 	ps.region = snapData.Region
-
-	// schedule worker to apply snapshot : send runner.RegionTaskApply to region worker
-	// 	throughPeerStorage.regionSched
-	ps.regionSched <- &runner.RegionTaskApply{
-		RegionId: 	snapData.Region.GetId(),
-		Notifier: 	ps.snapState.Receiver,		// when it finishes snapshot applying, it notifies notifier.
-		SnapMeta: 	snapshot.Metadata, 			// the region meta information of the snapshot
-		StartKey: 	snapData.Region.StartKey, 	// `StartKey` and `EndKey` are origin region's range, it's used to clean up certain range of region before applying snapshot.
-		EndKey:   	snapData.Region.EndKey,
-	}
 
 	// return apply result and error
 	return applyResult, nil
@@ -408,16 +416,6 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	raftWB := new(engine_util.WriteBatch)
 	kvWB := new(engine_util.WriteBatch)
 
-	// apply snapshot
-	var applyResult *ApplySnapResult
-	if !raft.IsEmptySnapshot(ready.Snapshot) {
-		var err error
-		applyResult, err = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// hardstate handling if not empty
 	if !raft.IsEmptyHardState(ready.HardState) {
 		// update PeerStorage's hardstate
@@ -426,7 +424,8 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState)
 	}
 
-	// call append with new entries + update
+	// call ps.Append to write log entries to db and update raftState.LastIndex/LastTerm
+	// Entries specifies entries to be saved to stable storage BEFORE Messages are sent.
 	if len(ready.Entries) > 0 {
 		if err := ps.Append(ready.Entries, raftWB); err != nil {
 			return nil, err
@@ -436,6 +435,15 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	// write to db
 	raftWB.MustWriteToDB(ps.Engines.Raft)
 	kvWB.MustWriteToDB(ps.Engines.Kv)
+
+	// apply snapshot : apply AFTER persisting states to memory
+	var applyResult *ApplySnapResult
+	if !raft.IsEmptySnap(&ready.Snapshot) && ps.validateSnap(&ready.Snapshot) {
+		var err error
+		if applyResult, err = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB); err != nil {
+			return nil, err
+		}
+	}
 
 	return applyResult, nil
 }

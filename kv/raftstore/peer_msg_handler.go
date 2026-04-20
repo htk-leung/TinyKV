@@ -56,7 +56,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		if err != nil {
 			panic(err)
 		}
-		// send messages in ready
+		// send messages in ready, including snapshots
 		d.peer.Send(d.ctx.trans, rd.Messages)
 
 		// drain stale proposals
@@ -65,73 +65,81 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		}
 
 		// handle committed entries && proposal callbacks
-		kvWB := new(engine_util.WriteBatch)
-		type entryResult struct {
-			entry     eraftpb.Entry
-			responses []*raft_cmdpb.Response
-		}
-		var results []entryResult
+		// CommitAndCallback(rd.CommittedEntries)
+		d.HandleCommittedEntries(rd.CommittedEntries)
 
-		for _, rawEntry := range rd.CommittedEntries {
-			// log.Infof("[region %d] processing committed entry [%d] index=%d term=%d", 
-        	// 	d.regionId, i, rawEntry.Index, rawEntry.Term)
-
-			// IF NOOP		: 
-			if len(rawEntry.Data) == 0 {
-				continue
-			}
-
-			// unmarshal data
-			entry := &raft_cmdpb.RaftCmdRequest{}
-			if err := entry.Unmarshal(rawEntry.Data); err != nil {
-				panic(err)
-			}
-
-			// IF ADMIN		: 
-			if entry.AdminRequest != nil {
-				d.HandleAdminReq(entry.AdminRequest)
-			} else { // IF REQ 		: 
-				responses := d.HandleReq(kvWB, entry, rawEntry.Term, rawEntry.Index)
-				results = append(results, entryResult{rawEntry, responses})
-			}
-		}
-
-		// update d.peer.peerStorage.applyState
-		if len(rd.CommittedEntries) > 0 {
-			d.peer.peerStorage.applyState.AppliedIndex = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
-			kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), d.peer.peerStorage.applyState)
-		}
-		// write to db, function already checks for entries len
-		kvWB.MustWriteToDB(d.ctx.engine.Kv)
-
-		// callbacks for each CommittedEntries - only needed if proposed locally
-		for _, result := range results {
-			if len(d.peer.proposals) == 0 { 
-				break 
-			}
-			// if matches proposal then send callback
-			proposal := d.peer.proposals[0]
-			if result.entry.Index == proposal.index {
-				// log.Infof("[region %d] callback for proposal [%d] index=%d term=%d, entry index=%d term=%d",
-            	// 	d.regionId, i, proposal.index, proposal.term, rawEntry.Index, rawEntry.Term)
-				
-				if result.entry.Term == proposal.term {
-					proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
-						Header: 		&raft_cmdpb.RaftResponseHeader{},
-						Responses: 		result.responses,
-					})
-				} else {
-					proposal.cb.Done(ErrRespStaleCommand(result.entry.Term))
-				}
-				// truncate proposal
-				d.peer.proposals = d.peer.proposals[1:]
-			}
-		}
-
-		// call advance from node
+		// call advance from RawNode s.t. changes to database is reflected in RawNode.Raft.RaftLog.storage
 		d.peer.RaftGroup.Advance(rd)
 	}
 	return
+}
+
+func (d *peerMsgHandler) HandleCommittedEntries(CommittedEntries []pb.Entry) {
+	// PREP
+	kvWB := new(engine_util.WriteBatch)
+	type entryResult struct {
+		entry     eraftpb.Entry
+		responses []*raft_cmdpb.Response
+	}
+	var results []entryResult
+
+	// PROCESS committed entries and get response
+	for _, rawEntry := range CommittedEntries {
+		// log.Infof("[region %d] processing committed entry [%d] index=%d term=%d", 
+		// 	d.regionId, i, rawEntry.Index, rawEntry.Term)
+
+		// IF NOOP		: 
+		if len(rawEntry.Data) == 0 {
+			continue
+		}
+
+		// unmarshal data
+		entry := &raft_cmdpb.RaftCmdRequest{}
+		if err := entry.Unmarshal(rawEntry.Data); err != nil {
+			panic(err)
+		}
+
+		// 2 kinds of requests, IF ADMIN : 
+		if entry.AdminRequest != nil {
+			d.HandleAdminReq(entry.AdminRequest)
+		} else { // IF REQ : 
+			responses := d.HandleReq(kvWB, entry, rawEntry.Term, rawEntry.Index)
+			results = append(results, entryResult{rawEntry, responses})
+		}
+	}
+
+	// UPDATE d.peer.peerStorage.applyState
+	if len(CommittedEntries) > 0 {
+		d.peer.peerStorage.applyState.AppliedIndex = CommittedEntries[len(CommittedEntries)-1].Index
+		kvWB.SetMeta(meta.ApplyStateKey(d.peer.regionId), d.peer.peerStorage.applyState)
+	}
+
+	// WRITE to db, function already checks for entries len
+	kvWB.MustWriteToDB(d.ctx.engine.Kv)
+
+	// CALLBACKS for each CommittedEntries - only needed if proposed locally
+	for _, result := range results {
+		if len(d.peer.proposals) == 0 { 
+			break 
+		}
+		// if matches proposal then send callback
+		proposal := d.peer.proposals[0]
+		if result.entry.Index == proposal.index {
+			// log.Infof("[region %d] callback for proposal [%d] index=%d term=%d, entry index=%d term=%d",
+			// 	d.regionId, i, proposal.index, proposal.term, rawEntry.Index, rawEntry.Term)
+			
+			if result.entry.Term == proposal.term {
+				proposal.cb.Done(&raft_cmdpb.RaftCmdResponse{
+					Header: 		&raft_cmdpb.RaftResponseHeader{},
+					Responses: 		result.responses,
+				})
+			} else {
+				proposal.cb.Done(ErrRespStaleCommand(result.entry.Term))
+			}
+			// truncate proposal
+			d.peer.proposals = d.peer.proposals[1:]
+		}
+	}
 }
 
 func (d *peerMsgHandler) HandleAdminReq(req *raft_cmdpb.AdminRequest) {
@@ -141,14 +149,18 @@ func (d *peerMsgHandler) HandleAdminReq(req *raft_cmdpb.AdminRequest) {
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 		return
 	case raft_cmdpb.AdminCmdType_CompactLog:
+		// STORAGE SIDE
 		// schedulecompactlog
-		d.ScheduleCompactLog(req.CompactLog.CompactIndex)
+		d.ScheduleCompactLog(req.CompactLog.GetCompactIndex())
 		// update raftapplystate
 		d.peer.peerStorage.applyState.TruncatedState = &eraftpb.RaftTruncatedState{
-			Index	: req.CompactLog.CompactIndex,
-			Term	: req.CompactLog.CompactTerm,
+			Index	: req.CompactLog.GetCompactIndex(),
+			Term	: req.CompactLog.GetCompactTerm(),
 		}
-		// snapshot???
+		// RAFT SIDE
+		// .Compact(compactIndex uint64) : ents[compactIndex] becomes dummy entry at i=0, everything before is discarded
+		d.peer.RaftGroup.Raft.RaftLog.storage.Compact(req.CompactLog.GetCompactIndex())
+		d.peer.RaftGroup.Raft.RaftLog.maybeCompact()
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 		return
 	case raft_cmdpb.AdminCmdType_Split:

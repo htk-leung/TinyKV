@@ -54,7 +54,6 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
-
 }
 
 /*
@@ -123,7 +122,7 @@ func newLog(storage Storage) *RaftLog {
 		storage: 			storage, 			// storage contains all stable entries since the last snapshot.
 												// refer to section "To restart a node from previous state:" in raft/doc.go
 		stabled: 			lastIndex, 			// index of last entry that exists in storage
-		committed: 			hardstate.Commit, 	// index of last entry replicated to a quorum of peers
+		committed: 			hardstate.GetCommit(), 	// index of last entry replicated to a quorum of peers
 		applied: 			0, 					// index of last entry applied locally, not available here, but available in config, needs to be applied when calling newRaft
 		entries:			entries, 			// all entries retrieved from storage
 		pendingSnapshot: 	nil,				// (Used in 2C)
@@ -135,6 +134,36 @@ func newLog(storage Storage) *RaftLog {
 // grow unlimitedly in memory
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
+
+	// A. use snapshot index : raftlog will follow if storage is snapshotted
+	// 	but function does not always follow snapshots
+
+	// B. use applied just like raftLogGCTaskHandler :
+	// 	applied is a local state updated after calling handleRaftReady
+	// 	should match applied in applystate
+	//	should be the correct approach because the only entries needed are the ones after applied - committed & stabled & unstable
+	// 	but needs to update entry return function s.t. it returns entries from .storage.ents if not found in raft.entries
+	//	may break many things, try later
+
+	// C. use storage.FirstIndex : always matching with persisted storage
+	// 	can grow quite big, perm storage only shrinks when snapshotted
+	logFirst := l.entries[0].Index
+	storageFirst, _ := l.storage.FirstIndex()-1 // FirstIndex returns index of ent[0]+1
+
+	if logFirst < storageFirst { // only compact if starting index is different
+		i := storageFirst - logFirst
+		if i < len(l.entries) { // < not <= because you always need 1 entry to become the dummy entry
+			// Normal case: local truncation
+            l.entries = l.entries[i:]
+        } else {
+            // Extreme case: full reload from storage
+			lastIdx, _ := l.storage.LastIndex()
+            ents, _ := l.storage.Entries(storageFirst, lastIdx+1)
+			term := l.storage.Term(storageFirst-1)
+            dummy := pb.Entry{Index: storageFirst-1, Term: term}
+            l.entries = append([]pb.Entry{dummy}, ents...)
+		}
+	}
 }
 
 // allEntries return all the entries not compacted.

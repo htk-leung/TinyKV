@@ -722,15 +722,10 @@ func (r *Raft) bcastAppend() {
 		- candidate becomes leader
 		- leader calls bcastappend to send entry to peers
 
-		'MessageType_MsgSnapshot' requests to install a snapshot message. When a node has just
-		become a leader or the leader receives 'MessageType_MsgPropose' message, it calls
-		'bcastAppend' method, which then calls 'sendAppend' method to each
-		follower. In 'sendAppend', if a leader fails to get term or entries,
-		the leader requests snapshot by sending 'MessageType_MsgSnapshot' type message.
-
 		>> always sent from leader to followers to ask followers to append entries
 		>> assumes entries already in r.RaftLog.entries
 	*/
+
 	// validity check
 	if r.Lead != r.id {
 		panic("bcastAppend called by non-Leader")
@@ -738,27 +733,63 @@ func (r *Raft) bcastAppend() {
 	// send requests
 	for p := range r.Prs {
 		if p != r.id {
+			// If sendAppend returns false (snapshot not ready)
+			// then wait for the next heartbeat response to trigger another sendAppend call via handleHeartbeatResponse
+			// by then the snapshot will likely be ready
 			r.sendAppend(p)
 		}
 	}
 }
-// sendAppend is called by leader through bcastappend to send an append RPC with new entries (if any) and
-// the current commit index to the given peer. Returns true if a message was sent.
+
+// sendAppend is called by leader through bcastappend to send 
+// an append RPC with new entries (if any) and
+// the current commit index to the given peer. 
+// Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
 
-	/* 	from doc.go
-	If you need to send out a message, just push it to raft.Raft.msgs and
-	all messages the raft received will be passed to raft.Raft.Step()
+	/* 	
+		from doc.go
+
+		If you need to send out a message, just push it to raft.Raft.msgs and
+		all messages the raft received will be passed to raft.Raft.Step()
+
+		'MessageType_MsgSnapshot' requests to install a snapshot message. When a node has just
+		become a leader or the leader receives 'MessageType_MsgPropose' message, it calls
+		'bcastAppend' method, which then calls 'sendAppend' method to each
+		follower. In 'sendAppend', if a leader fails to get term or entries,
+		the leader requests snapshot by sending 'MessageType_MsgSnapshot' type message.
+
+		** only called by leader
 	*/
-	// only called by leader
 
 	if to == r.Lead {
 		return false
 	}
 
 	offset :=  r.RaftLog.entries[0].Index
-	prevLogEntry := r.RaftLog.entries[r.Prs[to].Match-offset]
+	prevIdxi := r.Prs[to].Match-offset
+
+	// check if peer is too behind send snapshot
+	// too behind means matchIdx < r.RaftLog.entries[0].Index
+	if prevIdxi < 0 {
+		snapshot, err := r.RaftLog.storage.Snapshot()
+		if err != nil {
+			return false // if not ready yet try again later
+		}
+
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: 	pb.MessageType_MsgSnapshot,
+			To:      	to,
+			From:    	r.id,
+			Term:    	r.Term,
+			Snapshot:	&snapshot,
+		})
+		return true
+	}
+
+	// if not continue
+	prevLogEntry := r.RaftLog.entries[prevIdxi]
 
 	if r.RaftLog.LastIndex() > r.Prs[to].Match { // if there are things to send
 		entriesptrs := make([]*pb.Entry, 0)
@@ -1059,12 +1090,31 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 	}
 }
 
-// handleSnapshot handle Snapshot RPC request
+// handleSnapshot handle Snapshot RPC request to install a snapshot
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 
-	// save to raftlog
-	r.RaftLog.pendingSnapshot = m.Snapshot
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+	}
+	if m.Term < r.Term {
+		return
+	}
+
+	// Raft
+	prs := make(map[uint64]*Progress)
+	if len(m.Snapshot.Metadata.ConfState.Nodes) > 0 {
+		peers := m.Snapshot.Metadata.ConfState.Nodes
+		for _, p := range peers {
+			prs[p] = &Progress{}
+		}
+	}
+	r.Prs = prs
+		
+	// Raftlog
+	r.RaftLog.pendingSnapshot = m.Snapshot // don't apply here, save to pendingSnapshot and apply in handleReadyxxx
+	r.RaftLog.committed = m.Commit
+	r.RaftLog.applied = m.Snapshot.Metadata.Index
 }
 
 // addNode add a new node to raft group
