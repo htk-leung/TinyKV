@@ -1113,8 +1113,15 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 		
 	// Raftlog
 	r.RaftLog.pendingSnapshot = m.Snapshot // don't apply here, save to pendingSnapshot and apply in handleReadyxxx
-	r.RaftLog.committed = m.Commit
 	r.RaftLog.applied = m.Snapshot.Metadata.Index
+	r.RaftLog.committed = m.Snapshot.Metadata.Index
+	r.RaftLog.stabled = m.Snapshot.Metadata.Index
+	r.RaftLog.entries = []pb.Entry{
+		{
+			Index: 	m.Snapshot.Metadata.Index, 
+			Term: 	m.Snapshot.Metadata.Term,
+		},
+	}
 }
 
 // addNode add a new node to raft group

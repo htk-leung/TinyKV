@@ -242,7 +242,7 @@ func (rn *RawNode) Advance(rd Ready) {
 		rn.prevHardState = rd.HardState
 	}
 	// clear pendingsnapshot and apply snapshot to raftlog.storage
-	if !IsEmptySnap(rd.Snapshot) {
+	if !IsEmptySnap(&rd.Snapshot) {
         rn.Raft.RaftLog.pendingSnapshot = nil
     }
 	// update stabled

@@ -40,6 +40,8 @@ func testTxn(startTs uint64, f func(m *storage.MemStorage)) *MvccTxn {
 	return NewMvccTxn(reader, startTs)
 }
 
+// assertion used to confirm that after some operation, 
+// the transaction holds exactly one Put write with the right column family, key, and value
 func assertPutInTxn(t *testing.T, txn *MvccTxn, key []byte, value []byte, cf string) {
 	writes := txn.Writes()
 	assert.Equal(t, 1, len(writes))
@@ -58,7 +60,7 @@ func assertDeleteInTxn(t *testing.T, txn *MvccTxn, key []byte, cf string) {
 	assert.Equal(t, expected, del)
 }
 
-func TestPutLock4A(t *testing.T) {
+func TestPutLock4A(t *testing.T) { // 1 PASS
 	txn := testTxn(42, nil)
 	lock := Lock{
 		Primary: []byte{16},
@@ -68,10 +70,11 @@ func TestPutLock4A(t *testing.T) {
 	}
 
 	txn.PutLock([]byte{1}, &lock)
+	// func assertPutInTxn(t *testing.T, txn *MvccTxn, key []byte, value []byte, cf string)
 	assertPutInTxn(t, txn, []byte{1}, lock.ToBytes(), engine_util.CfLock)
 }
 
-func TestPutWrite4A(t *testing.T) {
+func TestPutWrite4A(t *testing.T) { // 2 PASS
 	txn := testTxn(0, nil)
 	write := Write{
 		StartTS: 100,
@@ -79,10 +82,11 @@ func TestPutWrite4A(t *testing.T) {
 	}
 
 	txn.PutWrite([]byte{16, 240}, 0, &write)
+	// func assertPutInTxn(t *testing.T, txn *MvccTxn, key []byte, value []byte, cf string)
 	assertPutInTxn(t, txn, EncodeKey([]byte{16, 240}, 0), write.ToBytes(), engine_util.CfWrite)
 }
 
-func TestPutValue4A(t *testing.T) {
+func TestPutValue4A(t *testing.T) { // 3 PASS
 	txn := testTxn(453325345, nil)
 	value := []byte{1, 1, 2, 3, 5, 8, 13}
 
@@ -90,7 +94,7 @@ func TestPutValue4A(t *testing.T) {
 	assertPutInTxn(t, txn, EncodeKey([]byte{32}, 453325345), value, engine_util.CfDefault)
 }
 
-func TestGetLock4A(t *testing.T) {
+func TestGetLock4A(t *testing.T) { // 4 PASS
 	lock := Lock{
 		Primary: []byte{16},
 		Ts:      100,
@@ -110,13 +114,13 @@ func TestGetLock4A(t *testing.T) {
 	assert.Nil(t, emptyLock)
 }
 
-func TestDeleteLock4A(t *testing.T) {
+func TestDeleteLock4A(t *testing.T) { // 5 PASS
 	txn := testTxn(42, nil)
 	txn.DeleteLock([]byte{1})
 	assertDeleteInTxn(t, txn, []byte{1}, engine_util.CfLock)
 }
 
-func TestDeleteValue4A(t *testing.T) {
+func TestDeleteValue4A(t *testing.T) { // 6 PASS
 	txn := testTxn(63454245, nil)
 	txn.DeleteValue([]byte{17, 255, 0})
 	assertDeleteInTxn(t, txn, EncodeKey([]byte{17, 255, 0}, 63454245), engine_util.CfDefault)
@@ -128,10 +132,11 @@ func singleEntry(m *storage.MemStorage) {
 		StartTS: 40,
 		Kind:    WriteKindPut,
 	}
+	// func (s *MemStorage) Set(cf string, key []byte, value []byte)
 	m.Set(engine_util.CfWrite, EncodeKey([]byte{16, 240}, 42), write.ToBytes())
 }
 
-func TestGetValueSimple4A(t *testing.T) {
+func TestGetValueSimple4A(t *testing.T) { // 7 PASS
 	txn := testTxn(43, singleEntry)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -139,7 +144,7 @@ func TestGetValueSimple4A(t *testing.T) {
 	assert.Equal(t, []byte{1, 2, 3}, value)
 }
 
-func TestGetValueMissing4A(t *testing.T) {
+func TestGetValueMissing4A(t *testing.T) { // 8 PASS
 	txn := testTxn(43, singleEntry)
 
 	value, err := txn.GetValue([]byte{16, 241})
@@ -147,7 +152,7 @@ func TestGetValueMissing4A(t *testing.T) {
 	assert.Equal(t, []byte(nil), value)
 }
 
-func TestGetValueTooEarly4A(t *testing.T) {
+func TestGetValueTooEarly4A(t *testing.T) { // 9 PASS
 	txn := testTxn(41, singleEntry)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -171,7 +176,7 @@ func twoEntries(m *storage.MemStorage) {
 	m.Set(engine_util.CfWrite, EncodeKey([]byte{16, 240}, 52), write2.ToBytes())
 }
 
-func TestGetValueOverwritten4A(t *testing.T) {
+func TestGetValueOverwritten4A(t *testing.T) { // 10 PASS
 	txn := testTxn(52, twoEntries)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -179,7 +184,7 @@ func TestGetValueOverwritten4A(t *testing.T) {
 	assert.Equal(t, []byte{255, 0, 255}, value)
 }
 
-func TestGetValueNotOverwritten4A(t *testing.T) {
+func TestGetValueNotOverwritten4A(t *testing.T) { // 11 PASS
 	txn := testTxn(50, twoEntries)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -202,7 +207,7 @@ func deleted(m *storage.MemStorage) {
 	m.Set(engine_util.CfWrite, EncodeKey([]byte{16, 240}, 52), write2.ToBytes())
 }
 
-func TestGetValueDeleted4A(t *testing.T) {
+func TestGetValueDeleted4A(t *testing.T) { // 12 PASS
 	txn := testTxn(500, deleted)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -210,7 +215,7 @@ func TestGetValueDeleted4A(t *testing.T) {
 	assert.Equal(t, []byte(nil), value)
 }
 
-func TestGetValueNotDeleted4A(t *testing.T) {
+func TestGetValueNotDeleted4A(t *testing.T) { // 13 PASS
 	txn := testTxn(45, deleted)
 
 	value, err := txn.GetValue([]byte{16, 240})
@@ -218,7 +223,7 @@ func TestGetValueNotDeleted4A(t *testing.T) {
 	assert.Equal(t, []byte{1, 2, 3}, value)
 }
 
-func TestCurrentWrite4A(t *testing.T) {
+func TestCurrentWrite4A(t *testing.T) { // 14 PASS
 	txn := testTxn(50, twoEntries)
 
 	write, ts, err := txn.CurrentWrite([]byte{16, 240})
@@ -246,7 +251,7 @@ func TestCurrentWrite4A(t *testing.T) {
 	assert.Equal(t, uint64(0), ts)
 }
 
-func TestMostRecentWrite4A(t *testing.T) {
+func TestMostRecentWrite4A(t *testing.T) { // 15
 	// Empty DB.
 	txn := testTxn(50, nil)
 	write, ts, err := txn.MostRecentWrite([]byte{16, 240})

@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+
 )
 
 type PeerTick int
@@ -78,7 +80,7 @@ func (d *peerMsgHandler) HandleCommittedEntries(CommittedEntries []pb.Entry) {
 	// PREP
 	kvWB := new(engine_util.WriteBatch)
 	type entryResult struct {
-		entry     eraftpb.Entry
+		entry     pb.Entry
 		responses []*raft_cmdpb.Response
 	}
 	var results []entryResult
@@ -149,18 +151,13 @@ func (d *peerMsgHandler) HandleAdminReq(req *raft_cmdpb.AdminRequest) {
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 		return
 	case raft_cmdpb.AdminCmdType_CompactLog:
-		// STORAGE SIDE
 		// schedulecompactlog
 		d.ScheduleCompactLog(req.CompactLog.GetCompactIndex())
 		// update raftapplystate
-		d.peer.peerStorage.applyState.TruncatedState = &eraftpb.RaftTruncatedState{
+		d.peer.peerStorage.applyState.TruncatedState = &rspb.RaftTruncatedState{
 			Index	: req.CompactLog.GetCompactIndex(),
 			Term	: req.CompactLog.GetCompactTerm(),
 		}
-		// RAFT SIDE
-		// .Compact(compactIndex uint64) : ents[compactIndex] becomes dummy entry at i=0, everything before is discarded
-		d.peer.RaftGroup.Raft.RaftLog.storage.Compact(req.CompactLog.GetCompactIndex())
-		d.peer.RaftGroup.Raft.RaftLog.maybeCompact()
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 		return
 	case raft_cmdpb.AdminCmdType_Split:
@@ -171,8 +168,8 @@ func (d *peerMsgHandler) HandleAdminReq(req *raft_cmdpb.AdminRequest) {
 func (d *peerMsgHandler) HandleReq(
 	kvWB *engine_util.WriteBatch, 
 	entry *raft_cmdpb.RaftCmdRequest,
-	rawEntryTerm, rawEntryIndex uint64) []*raft_cmdpb.Response 
-{
+	rawEntryTerm, rawEntryIndex uint64) []*raft_cmdpb.Response {
+
 	var responses []*raft_cmdpb.Response
 
 	// for each request in the entry apply entry & get response
@@ -218,7 +215,7 @@ func (d *peerMsgHandler) HandleReq(
 	return responses
 }
 
-func (d *peerMsgHandler) DrainStaleProposals(firstEntry eraftpb.Entry) {
+func (d *peerMsgHandler) DrainStaleProposals(firstEntry pb.Entry) {
     for len(d.peer.proposals) > 0 {
         proposal := d.peer.proposals[0]
         if proposal.term < firstEntry.Term ||

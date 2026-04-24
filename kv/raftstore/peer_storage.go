@@ -356,6 +356,9 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
 
+	// update RegionLocal statetype
+	ps.snapState.StateType = snap.SnapState_Applying
+
 	// Badger DBs : remove stale states from db
 	ps.clearMeta(kvWB, raftWB)
 	ps.clearExtraData(snapData.Region)
@@ -368,7 +371,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	ps.regionSched <- &runner.RegionTaskApply{
 		RegionId: 	snapData.Region.GetId(),
 		Notifier: 	notifier,						// when it finishes snapshot applying, it notifies notifier, but WHO? runner.RegionTaskApply himself ref region_task.go:122
-		SnapMeta: 	snapData.GetMeta(), 			// the region meta information of the snapshot
+		SnapMeta: 	snapshot.Metadata, 			// the region meta information of the snapshot
 		StartKey: 	snapData.Region.GetStartKey(), 	// `StartKey` and `EndKey` are origin region's range, it's used to clean up certain range of region before applying snapshot.
 		EndKey:   	snapData.Region.GetEndKey(),
 	}
@@ -382,17 +385,18 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	// update applyState
 	ps.applyState = &rspb.RaftApplyState{
 		AppliedIndex:	snapshot.Metadata.Index,
-		TruncatedIndex:	&rspb.RaftTruncatedState{
+		TruncatedState:	&rspb.RaftTruncatedState{
 			Index:		snapshot.Metadata.Index,
 			Term:		snapshot.Metadata.Term,
 		},
 	}
 
-	// update RegionLocal statetype
-	ps.snapState.StateType = snap.SnapState_Applying
+	// update raftState
+	ps.raftState.LastIndex = snapshot.Metadata.Index
+	ps.raftState.LastTerm = snapshot.Metadata.Term
 
 	// Direct function calls : persist to kvdb, raftdb
-	WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
+	meta.WriteRegionState(kvWB, snapData.Region, rspb.PeerState_Normal)
 	kvWB.SetMeta(meta.ApplyStateKey(snapData.Region.GetId()), ps.applyState)
 
 	// update region
@@ -401,6 +405,9 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 		Region:			snapData.Region,
 	}
 	ps.region = snapData.Region
+
+	// update state again
+	ps.snapState.StateType = snap.SnapState_Relax
 
 	// return apply result and error
 	return applyResult, nil
@@ -432,10 +439,6 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		}
 	}
 
-	// write to db
-	raftWB.MustWriteToDB(ps.Engines.Raft)
-	kvWB.MustWriteToDB(ps.Engines.Kv)
-
 	// apply snapshot : apply AFTER persisting states to memory
 	var applyResult *ApplySnapResult
 	if !raft.IsEmptySnap(&ready.Snapshot) && ps.validateSnap(&ready.Snapshot) {
@@ -444,6 +447,10 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 			return nil, err
 		}
 	}
+
+	// write to db
+	raftWB.MustWriteToDB(ps.Engines.Raft)
+	kvWB.MustWriteToDB(ps.Engines.Kv)
 
 	return applyResult, nil
 }

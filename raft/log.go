@@ -148,18 +148,19 @@ func (l *RaftLog) maybeCompact() {
 	// C. use storage.FirstIndex : always matching with persisted storage
 	// 	can grow quite big, perm storage only shrinks when snapshotted
 	logFirst := l.entries[0].Index
-	storageFirst, _ := l.storage.FirstIndex()-1 // FirstIndex returns index of ent[0]+1
+	storageFirst, _ := l.storage.FirstIndex()
+	storageFirst -= 1 // FirstIndex returns index of ent[0]+1
 
 	if logFirst < storageFirst { // only compact if starting index is different
 		i := storageFirst - logFirst
-		if i < len(l.entries) { // < not <= because you always need 1 entry to become the dummy entry
+		if i < uint64(len(l.entries)) { // < not <= because you always need 1 entry to become the dummy entry
 			// Normal case: local truncation
             l.entries = l.entries[i:]
         } else {
             // Extreme case: full reload from storage
 			lastIdx, _ := l.storage.LastIndex()
             ents, _ := l.storage.Entries(storageFirst, lastIdx+1)
-			term := l.storage.Term(storageFirst-1)
+			term, _ := l.storage.Term(storageFirst-1)
             dummy := pb.Entry{Index: storageFirst-1, Term: term}
             l.entries = append([]pb.Entry{dummy}, ents...)
 		}
