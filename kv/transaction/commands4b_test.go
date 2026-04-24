@@ -20,7 +20,8 @@ func TestGetValue4B(t *testing.T) {
 	var req kvrpcpb.GetRequest
 	req.Key = []byte{99}
 	req.Version = mvcc.TsMax
-	resp := builder.runOneRequest(&req).(*kvrpcpb.GetResponse)
+	// run req and get response, dynamically programmed to run any request
+	resp := builder.runOneRequest(&req).(*kvrpcpb.GetResponse) 
 
 	assert.Nil(t, resp.RegionError)
 	assert.Nil(t, resp.Error)

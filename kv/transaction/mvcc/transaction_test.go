@@ -251,7 +251,7 @@ func TestCurrentWrite4A(t *testing.T) { // 14 PASS
 	assert.Equal(t, uint64(0), ts)
 }
 
-func TestMostRecentWrite4A(t *testing.T) { // 15
+func TestMostRecentWrite4A(t *testing.T) { // 15 PASS
 	// Empty DB.
 	txn := testTxn(50, nil)
 	write, ts, err := txn.MostRecentWrite([]byte{16, 240})

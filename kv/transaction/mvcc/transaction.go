@@ -224,7 +224,7 @@ func (txn *MvccTxn) CurrentWrite(key []byte) (*Write, uint64, error) {
 	// don't know commit ts, only know start ts
 	// but max timestamp is input max of uint64
 	// then seek will find the most recent write
-	it.Seek(EncodeKey(key, uint64(math.MaxUint64))) 
+	it.Seek(EncodeKey(key, mvcc.TsMax)) 
 
 	// call Next() until found
 	for ; it.Valid(); it.Next() {
@@ -271,7 +271,7 @@ func (txn *MvccTxn) MostRecentWrite(key []byte) (*Write, uint64, error) {
 	defer it.Close()
 
 	// position iterator
-	it.Seek(EncodeKey(key, uint64(math.MaxUint64))) 
+	it.Seek(EncodeKey(key, mvcc.TsMax)) 
 
 	// call Next() until found
 	for ; it.Valid(); it.Next() {
