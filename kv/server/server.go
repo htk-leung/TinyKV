@@ -81,20 +81,26 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 	reader, err := server.storage.Reader(req.Context)
 	if err != nil {
 		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError) {
+			return &kvrpcpb.GetRequest{
+				RegionError: regionErr.RequestErr,
+			}
+		}
 		// B. not region error, not key error, not value, not not found
+		return nil, err
 	}
 	defer reader.Close()
 
 	// new transaction
 	txn := mvcc.NewMvccTxn(reader, req.Version)
 
-	// Check for locks that signal concurrent writes.
+	// check for locks that signal concurrent writes
 	lock, err := txn.GetLock(req.Key)
 	if err != nil { // not region error, not key error, not value, not not found
 		return nil, err
 	}
-	if lock != nil && lock.Ts < req.Version { // if key is locked return key error
-		return &kvrpcpb.GetResponse{
+	if lock != nil && lock.Ts < req.Version { // if key is locked 
+		return &kvrpcpb.GetResponse{	// return key error
 			Error:	&kvrpcpb.KeyError{
 				Locked:	&kvrpcpb.LockInfo{
 					PrimaryLock:	lock.Primary,
@@ -103,7 +109,7 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 					LockTtl:		lock.Ttl,
 				}
 			}
-		}, err
+		}, nil
 	}
 
 	// get value
