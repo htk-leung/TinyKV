@@ -534,7 +534,7 @@ func TestCommitConflictRollback4B(t *testing.T) { // 21 PASS
 }
 
 // TestCommitConflictRace4B tests committing where a key is pre-written by a different transaction.
-func TestCommitConflictRace4B(t *testing.T) { // 22
+func TestCommitConflictRace4B(t *testing.T) { // 22 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -543,7 +543,7 @@ func TestCommitConflictRace4B(t *testing.T) { // 22
 	})
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.CommitResponse)
 
-	assert.NotEmpty(t, resp.Error.Retryable)
+	assert.NotEmpty(t, resp.Error.Retryable) // <<< need something here, but not, why? Retry when : 
 	assert.Nil(t, resp.RegionError)
 	builder.assertLens(1, 1, 0)
 	builder.assert([]kv{
@@ -553,7 +553,7 @@ func TestCommitConflictRace4B(t *testing.T) { // 22
 }
 
 // TestCommitConflictRepeat4B tests recommitting a transaction (i.e., the same commit request is received twice).
-func TestCommitConflictRepeat4B(t *testing.T) { // 23
+func TestCommitConflictRepeat4B(t *testing.T) { // 23 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{

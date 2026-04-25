@@ -10,6 +10,7 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"bytes"
+	// "fmt"
 )
 
 // KeyError is a wrapper type so we can implement the `error` interface.
@@ -169,11 +170,71 @@ func (txn *MvccTxn) GetValue(key []byte) ([]byte, error) {
 			return nil, nil
 		}
 
-		// return getCF
+		// return getCF, must use StartTS from write, don't call function below
 		return txn.Reader.GetCF(engine_util.CfDefault, EncodeKey(key, write.StartTS))
 	}
 
 	return nil, nil
+}
+
+// CUSTOM
+// get value without getting write first
+// used here or in server to get prewritten values
+func (txn *MvccTxn) GetValuePrewritten(key []byte) ([]byte, error) {
+	// Your Code Here (4A).
+	return txn.Reader.GetCF(engine_util.CfDefault, EncodeKey(key, txn.StartTS))
+}
+
+// CUSTOM
+// Consider prewritten checks
+// A. If there is no data for key -> false, false
+// B. If there is data, but none is written by the same transaction -> true, false
+// C. If there is data, but that written by the same transaction is found -> true, true
+func (txn *MvccTxn) KeyExists(key []byte) (bool, bool) {
+	// Your Code Here (4A).
+	// get BadgerIterator
+	it := txn.Reader.IterCF(engine_util.CfDefault)
+	defer it.Close()
+	
+	it.Seek(EncodeKey(key, TsMax))
+	if !it.Valid() {
+		return false, false
+	}
+
+	// A. If there is no data for key, then return nothing
+	item := it.Item()
+	userKey := DecodeUserKey(item.Key())
+	if !bytes.Equal(userKey, key) { // prewrite does not exist
+		return false, false
+	}
+
+	// B. If there is data, but none is written by the same transaction
+	ts := decodeTimestamp(item.Key())
+	if txn.StartTS == ts { // prewrite exists and written by current txn
+		return true, true
+	}
+	it.Next() // prewrite exists and not written by current txn, check next
+
+	// call Next() until found
+	for ; it.Valid(); it.Next() {
+		item := it.Item()
+
+		// check key is still the same, if not then no prewrites are written by txn
+		userKey := DecodeUserKey(item.Key())
+        if !bytes.Equal(userKey, key) {
+            return true, false
+        }
+
+		// if ts matches then yes
+		ts := decodeTimestamp(item.Key())
+		if txn.StartTS == ts { // prewrite exists and written by current txn
+			return true, true
+		}
+
+		// else prewrite exists and not written by current txn, check next
+	}
+
+	return true, false
 }
 
 // PutValue adds a key/value write to this transaction.

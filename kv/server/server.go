@@ -13,6 +13,8 @@ import (
 	"github.com/pingcap/tidb/kv"
 
 	"github.com/pingcap-incubator/tinykv/kv/transaction/mvcc"
+	// "fmt"
+	// "github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 )
 
 var _ tinykvpb.TinyKvServer = new(Server)
@@ -98,7 +100,7 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 	if err != nil { // not region error, not key error, not value, not not found
 		return nil, err
 	}
-	// if lock ts is at least as older than current then you can't read yet
+	// if lock ts is at least as old than current then you can't read yet
 	if lock != nil && lock.Ts <= req.Version { 
 		return &kvrpcpb.GetResponse{	// return key error
 			Error:	&kvrpcpb.KeyError{
@@ -209,7 +211,7 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 
 	// If locking any key for mvcc fails, then TinyKV responds to the client that the transaction has failed.
 	for _, m := range req.Mutations {
-		// Abort on writes after our start timestamp
+		// save error on writes after our start timestamp
 		write, ts, err := txn.MostRecentWrite(m.Key)
 		if err != nil {
 			return nil, err
@@ -244,20 +246,11 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 		}
 
 		// if no one has lock and there is no conflicting write then stage put lock
-		var kind mvcc.WriteKind
-		switch m.Op {
-		case kvrpcpb.Op_Put:
-			kind = 	mvcc.WriteKindPut
-		case kvrpcpb.Op_Del:
-			kind = mvcc.WriteKindDelete
-		case kvrpcpb.Op_Rollback:
-			kind = mvcc.WriteKindRollback
-		}
 		lock = &mvcc.Lock{
 			Primary: req.PrimaryLock,
 			Ts:      req.StartVersion,
 			Ttl:     req.LockTtl,
-			Kind:    kind,
+			Kind:    mvcc.WriteKindFromProto(m.Op),
 		}
 		txn.PutLock(m.Key, lock)
 
@@ -266,7 +259,7 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 			txn.PutValue(m.Key, m.Value)
 		case kvrpcpb.Op_Del:
 			txn.DeleteValue(m.Key)
-		case kvrpcpb.Op_Rollback:
+		case kvrpcpb.Op_Rollback: // ?
 		default:
 		}
 	}
@@ -303,39 +296,18 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 			// Must be greater than start_version.
 			CommitVersion        uint64   `protobuf:"varint,4,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
 		}
+		type Context struct {
+			RegionId             uint64              `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+			RegionEpoch          *metapb.RegionEpoch `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch" json:"region_epoch,omitempty"`
+			Peer                 *metapb.Peer        `protobuf:"bytes,3,opt,name=peer" json:"peer,omitempty"`
+			Term                 uint64              `protobuf:"varint,5,opt,name=term,proto3" json:"term,omitempty"`
+		}
 		type CommitResponse struct {
 			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
 			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
 			XXX_NoUnkeyedLiteral struct{}       `json:"-"`
 			XXX_unrecognized     []byte         `json:"-"`
 			XXX_sizecache        int32          `json:"-"`
-		}
-		bool Commit() {
-			Write primary = writes [0];
-			vector<Write> secondaries(writes .begin()+1, writes .end());
-			if (!Prewrite(primary, primary)) return false;
-			for (Write w : secondaries)
-				if (!Prewrite(w, primary)) return false;
-
-			int commit ts = oracle .GetTimestamp();
-
-			// Commit primary first.
-			Write p = primary;
-			bigtable::Txn T = bigtable::StartRowTransaction(p.row);
-			if (!T.Read(p.row, p.col+"lock", [start ts , start ts ]))
-				return false; 							// aborted while working
-
-			T.Write(p.row, p.col+"write", commit ts,
-			start ts ); 								// Pointer to data written at start ts .
-			T.Erase(p.row, p.col+"lock", commit ts);
-			if (!T.Commit()) return false; 				// commit point
-
-			// Second phase: write out write records for secondary cells.
-			for (Write w : secondaries) {
-				bigtable::Write(w.row, w.col+"write", commit ts, start ts );
-				bigtable::Erase(w.row, w.col+"lock", commit ts);
-			}
-			return true;
 		}
 	*/
 
@@ -358,37 +330,70 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 	server.Latches.WaitForLatches(req.Keys)
 	defer server.Latches.ReleaseLatches(req.Keys)
 
+	var lock *mvcc.Lock
+
 	// for each key
 	for _, k := range req.Keys { 
-		// get lock : if lock still exists then it's valid = checking for write conflict
-		// but can lock be replaced?
-		lock, err := txn.GetLock(k)
-
-		// if err, abort & return response
+		// check for repeated writes/rollback
+		// if found ignore
+		write, _, err := txn.CurrentWrite(k)
 		if err != nil {
 			return nil, err
 		}
-		if lock == nil { // txn rolled back
+		if write != nil { 
+			// if write exists, then
+			// A. txn rolledback, default doesn't exist, leaving only the write entry
+			if write.Kind == mvcc.WriteKindRollback {
+				return &kvrpcpb.CommitResponse{
+					Error: &kvrpcpb.KeyError{
+						Abort:	"Transaction rolled back, write exists, data does not",
+					},
+				}, nil
+			}
+			// B. repeated commit, ignore key
+			continue 
+		}
+
+		/*
+			Consider prewritten checks
+			A. If there is no data for key, then return nothing
+			B. If there is data, but none is written by the same transaction, then return Retryable error
+			C. If there is data, but that written by the same transaction is found, then continue
+		*/
+		keyWritten, thisTxn := txn.KeyExists(k)
+
+		// A. key not written
+		if !keyWritten && !thisTxn {
+			return &kvrpcpb.CommitResponse{}, nil
+		}
+		
+		// B. not prewritten by this txn
+		if keyWritten && !thisTxn { 
 			return &kvrpcpb.CommitResponse{
 				Error: &kvrpcpb.KeyError{
-					Retryable:	"KvCommit: lock not found, txn rolled back?",
+					Retryable:	"KvCommit: prewritten data not found",
 				},
 			}, nil
+		} 
+		// C. VVVV
+
+		// get lock : if lock still exists then it's valid = checking for write conflict
+		// but can lock be replaced?
+		lock, err = txn.GetLock(k)
+		// if err, abort
+		if err != nil {
+			return nil, err
 		}
-		if lock.Ts != req.StartVersion {
+		// if lock found and doesn't belong to this transaction or
+		// if lock not found then someone else might have written to the key, abort
+		if lock == nil || (lock != nil && lock.Ts != req.StartVersion) {
 			return &kvrpcpb.CommitResponse{
 				Error: &kvrpcpb.KeyError{
-					Locked:	&kvrpcpb.LockInfo{
-						PrimaryLock:	lock.Primary,
-						LockVersion:	lock.Ts,
-						Key:			k,
-						LockTtl:		lock.Ttl,
-					},
+					Retryable:	"KvCommit: keyLocked, txn rolled back?",
 				},
 			}, nil
 		}
 
-		// if not
 		// PutWrite PutWrite(key []byte, ts uint64, write *Write)
 		txn.PutWrite(k, req.CommitVersion, &mvcc.Write{
 			StartTS: 	req.StartVersion,
@@ -397,7 +402,6 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 		// delete lock
 		txn.DeleteLock(k)
 	}
-
 	// write to storage func (rs *RaftStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify)
 	err = server.storage.Write(req.Context, txn.Writes())
 	if err != nil {
