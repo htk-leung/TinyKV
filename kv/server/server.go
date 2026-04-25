@@ -209,7 +209,7 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 
 	// If locking any key for mvcc fails, then TinyKV responds to the client that the transaction has failed.
 	for _, m := range req.Mutations {
-		// write conflict check
+		// Abort on writes after our start timestamp
 		write, ts, err := txn.MostRecentWrite(m.Key)
 		if err != nil {
 			return nil, err
@@ -226,13 +226,12 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 			continue // next key
 		}
 
-		// if not out of date then try to get lock
+		// Abort on locks at any timestamp
 		lock, err := txn.GetLock(m.Key)
 		if err != nil { // not region error, not key error, not value, not not found
 			return nil, err
 		}
-		// if lock is older then cannot write
-		if lock != nil && lock.Ts < req.StartVersion { 
+		if lock != nil && lock.Ts != req.StartVersion { 
 			keyErrors = append(keyErrors, &kvrpcpb.KeyError{
 				Locked:	&kvrpcpb.LockInfo{
 					PrimaryLock:	lock.Primary,
@@ -293,8 +292,126 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 		containing the primary key. The commit request will contain a commit timestamp 
 		(which the client also gets from TinyScheduler) which is the time at which the 
 		transaction's writes are committed and thus become visible to other transactions.
+
+		type CommitRequest struct {
+			Context *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
+			// Identifies the transaction, must match the start_version in the transaction's
+			// prewrite request.
+			StartVersion uint64 `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+			// Must match the keys mutated by the transaction's prewrite request.
+			Keys [][]byte `protobuf:"bytes,3,rep,name=keys" json:"keys,omitempty"`
+			// Must be greater than start_version.
+			CommitVersion        uint64   `protobuf:"varint,4,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+		}
+		type CommitResponse struct {
+			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
+			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
+			XXX_NoUnkeyedLiteral struct{}       `json:"-"`
+			XXX_unrecognized     []byte         `json:"-"`
+			XXX_sizecache        int32          `json:"-"`
+		}
+		bool Commit() {
+			Write primary = writes [0];
+			vector<Write> secondaries(writes .begin()+1, writes .end());
+			if (!Prewrite(primary, primary)) return false;
+			for (Write w : secondaries)
+				if (!Prewrite(w, primary)) return false;
+
+			int commit ts = oracle .GetTimestamp();
+
+			// Commit primary first.
+			Write p = primary;
+			bigtable::Txn T = bigtable::StartRowTransaction(p.row);
+			if (!T.Read(p.row, p.col+"lock", [start ts , start ts ]))
+				return false; 							// aborted while working
+
+			T.Write(p.row, p.col+"write", commit ts,
+			start ts ); 								// Pointer to data written at start ts .
+			T.Erase(p.row, p.col+"lock", commit ts);
+			if (!T.Commit()) return false; 				// commit point
+
+			// Second phase: write out write records for secondary cells.
+			for (Write w : secondaries) {
+				bigtable::Write(w.row, w.col+"write", commit ts, start ts );
+				bigtable::Erase(w.row, w.col+"lock", commit ts);
+			}
+			return true;
+		}
 	*/
-	return nil, nil
+
+	// new transaction
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.CommitResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+	defer reader.Close()
+	txn := mvcc.NewMvccTxn(reader, req.StartVersion)
+
+	// get latches
+	server.Latches.WaitForLatches(req.Keys)
+	defer server.Latches.ReleaseLatches(req.Keys)
+
+	// for each key
+	for _, k := range req.Keys { 
+		// get lock : if lock still exists then it's valid = checking for write conflict
+		// but can lock be replaced?
+		lock, err := txn.GetLock(k)
+
+		// if err, abort & return response
+		if err != nil {
+			return nil, err
+		}
+		if lock == nil { // txn rolled back
+			return &kvrpcpb.CommitResponse{
+				Error: &kvrpcpb.KeyError{
+					Retryable:	"KvCommit: lock not found, txn rolled back?",
+				},
+			}, nil
+		}
+		if lock.Ts != req.StartVersion {
+			return &kvrpcpb.CommitResponse{
+				Error: &kvrpcpb.KeyError{
+					Locked:	&kvrpcpb.LockInfo{
+						PrimaryLock:	lock.Primary,
+						LockVersion:	lock.Ts,
+						Key:			k,
+						LockTtl:		lock.Ttl,
+					},
+				},
+			}, nil
+		}
+
+		// if not
+		// PutWrite PutWrite(key []byte, ts uint64, write *Write)
+		txn.PutWrite(k, req.CommitVersion, &mvcc.Write{
+			StartTS: 	req.StartVersion,
+			Kind:		lock.Kind,
+		})
+		// delete lock
+		txn.DeleteLock(k)
+	}
+
+	// write to storage func (rs *RaftStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify)
+	err = server.storage.Write(req.Context, txn.Writes())
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.CommitResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+
+	return &kvrpcpb.CommitResponse{}, nil
 }
 
 func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {

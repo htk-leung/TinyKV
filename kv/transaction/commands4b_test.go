@@ -272,7 +272,7 @@ func TestSinglePrewrite4B(t *testing.T) { // 9 PASS
 }
 
 // TestPrewriteLocked4B tests that two prewrites to the same key causes a lock error.
-func TestPrewriteLocked4B(t *testing.T) { // 10
+func TestPrewriteLocked4B(t *testing.T) { // 10 PASS
 	builder := newBuilder(t)
 	// func mutation(key byte, value []byte, op kvrpcpb.Op)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
@@ -392,7 +392,7 @@ func TestPrewriteMultiple4B(t *testing.T) { // 15 PASS
 }
 
 // TestEmptyCommit4B tests a commit request with no keys to commit.
-func TestEmptyCommit4B(t *testing.T) { // 16
+func TestEmptyCommit4B(t *testing.T) { // 16 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([][]byte{}...)
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.CommitResponse)
@@ -403,7 +403,7 @@ func TestEmptyCommit4B(t *testing.T) { // 16
 }
 
 // TestSimpleCommit4B tests committing a single key.
-func TestSingleCommit4B(t *testing.T) { // 17
+func TestSingleCommit4B(t *testing.T) { // 17 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -422,7 +422,7 @@ func TestSingleCommit4B(t *testing.T) { // 17
 }
 
 // TestCommitOverwrite4B tests committing where there is already a write.
-func TestCommitOverwrite4B(t *testing.T) { // 18
+func TestCommitOverwrite4B(t *testing.T) { // 18 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -447,7 +447,7 @@ func TestCommitOverwrite4B(t *testing.T) { // 18
 
 // TestCommitMultipleKeys4B tests committing multiple keys in the same commit. Also puts some other data in the DB and test
 // that it is unchanged.
-func TestCommitMultipleKeys4B(t *testing.T) { // 19
+func TestCommitMultipleKeys4B(t *testing.T) { // 19 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3}, []byte{12, 4, 0}, []byte{15})
 	builder.init([]kv{
@@ -497,7 +497,7 @@ func TestCommitMultipleKeys4B(t *testing.T) { // 19
 }
 
 // TestRecommitKey4B tests committing the same key multiple times in one commit.
-func TestRecommitKey4B(t *testing.T) { // 20
+func TestRecommitKey4B(t *testing.T) { // 20 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3}, []byte{3})
 	builder.init([]kv{
@@ -517,7 +517,7 @@ func TestRecommitKey4B(t *testing.T) { // 20
 }
 
 // TestCommitConflictRollback4B tests committing a rolled back transaction.
-func TestCommitConflictRollback4B(t *testing.T) { // 21
+func TestCommitConflictRollback4B(t *testing.T) { // 21 PASS
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
