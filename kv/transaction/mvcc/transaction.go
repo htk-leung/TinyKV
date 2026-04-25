@@ -10,7 +10,6 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"bytes"
-	"math"
 )
 
 // KeyError is a wrapper type so we can implement the `error` interface.
@@ -224,7 +223,7 @@ func (txn *MvccTxn) CurrentWrite(key []byte) (*Write, uint64, error) {
 	// don't know commit ts, only know start ts
 	// but max timestamp is input max of uint64
 	// then seek will find the most recent write
-	it.Seek(EncodeKey(key, mvcc.TsMax)) 
+	it.Seek(EncodeKey(key, TsMax)) 
 
 	// call Next() until found
 	for ; it.Valid(); it.Next() {
@@ -271,7 +270,7 @@ func (txn *MvccTxn) MostRecentWrite(key []byte) (*Write, uint64, error) {
 	defer it.Close()
 
 	// position iterator
-	it.Seek(EncodeKey(key, mvcc.TsMax)) 
+	it.Seek(EncodeKey(key, TsMax)) 
 
 	// call Next() until found
 	for ; it.Valid(); it.Next() {

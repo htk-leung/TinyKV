@@ -12,7 +12,7 @@ import (
 	"github.com/pingcap-incubator/tinykv/proto/pkg/tinykvpb"
 	"github.com/pingcap/tidb/kv"
 
-	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
+	"github.com/pingcap-incubator/tinykv/kv/transaction/mvcc"
 )
 
 var _ tinykvpb.TinyKvServer = new(Server)
@@ -54,7 +54,10 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 	// Your Code Here (4B).
 
 	/*
-		// Read the value of a key at the given time.
+		KvGet reads a value from the database at a supplied timestamp. If the key to be read is locked 
+		by another transaction at the time of the KvGet request, then TinyKV should return an error. Otherwise, TinyKV must 
+		search the versions of the key to find the most recent, valid value.
+
 		type GetRequest struct {
 			Context              *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
 			Key                  []byte   `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
@@ -73,33 +76,30 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 			// True if the requested key doesn't exist; another error will not be signalled.
 			NotFound             bool     `protobuf:"varint,4,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
 		}
-		KvGet reads a value from the database at a supplied timestamp. If the key to be read is locked 
-		by another transaction at the time of the KvGet request, then TinyKV should return an error. Otherwise, TinyKV must 
-		search the versions of the key to find the most recent, valid value.
 	*/
 
+	// new transaction
 	reader, err := server.storage.Reader(req.Context)
 	if err != nil {
 		// A. region error
-		if regionErr, ok := err.(*raft_storage.RegionError) {
-			return &kvrpcpb.GetRequest{
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.GetResponse{
 				RegionError: regionErr.RequestErr,
-			}
+			}, nil
 		}
 		// B. not region error, not key error, not value, not not found
 		return nil, err
 	}
 	defer reader.Close()
-
-	// new transaction
 	txn := mvcc.NewMvccTxn(reader, req.Version)
 
-	// check for locks that signal concurrent writes
+	// wait for latch
 	lock, err := txn.GetLock(req.Key)
 	if err != nil { // not region error, not key error, not value, not not found
 		return nil, err
 	}
-	if lock != nil && lock.Ts < req.Version { // if key is locked 
+	// if lock ts is at least as older than current then you can't read yet
+	if lock != nil && lock.Ts <= req.Version { 
 		return &kvrpcpb.GetResponse{	// return key error
 			Error:	&kvrpcpb.KeyError{
 				Locked:	&kvrpcpb.LockInfo{
@@ -107,13 +107,14 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 					LockVersion:	lock.Ts,
 					Key:			req.Key,
 					LockTtl:		lock.Ttl,
-				}
-			}
+				},
+			},
 		}, nil
 	}
+	// if lock ts is newer than current then you can read
 
 	// get value
-	val, err := txn.GetValue(key)
+	val, err := txn.GetValue(req.Key)
 	if err != nil { // not region error, not key error, not value, not not found
 		return nil, err
 	}
@@ -143,8 +144,145 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 		In fact, since the keys in a transaction may be in multiple regions and thus be 
 		stored in different Raft groups, the client will send multiple KvPrewrite requests, 
 		one to each region leader. Each prewrite contains only the modifications for that region.
+
+		type PrewriteRequest struct {
+			Context   *Context    `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
+			Mutations []*Mutation `protobuf:"bytes,2,rep,name=mutations" json:"mutations,omitempty"`
+			// Key of the primary lock.
+			PrimaryLock          []byte   `protobuf:"bytes,3,opt,name=primary_lock,json=primaryLock,proto3" json:"primary_lock,omitempty"`
+			StartVersion         uint64   `protobuf:"varint,4,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+			LockTtl              uint64   `protobuf:"varint,5,opt,name=lock_ttl,json=lockTtl,proto3" json:"lock_ttl,omitempty"`
+		}
+		type Context struct {
+			RegionId             uint64              `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+			RegionEpoch          *metapb.RegionEpoch `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch" json:"region_epoch,omitempty"`
+			Peer                 *metapb.Peer        `protobuf:"bytes,3,opt,name=peer" json:"peer,omitempty"`
+			Term                 uint64              `protobuf:"varint,5,opt,name=term,proto3" json:"term,omitempty"`
+		}
+		type Mutation struct {
+			Op                   Op       `protobuf:"varint,1,opt,name=op,proto3,enum=kvrpcpb.Op" json:"op,omitempty"`
+			Key                  []byte   `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+			Value                []byte   `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+		}
+		type Op int32
+		const (
+			Op_Put      Op = 0
+			Op_Del      Op = 1
+			Op_Rollback Op = 2
+			// Used by TinySQL but not TinyKV.
+			Op_Lock Op = 3
+		)
+		type PrewriteResponse struct {
+			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
+			Errors               []*KeyError    `protobuf:"bytes,2,rep,name=errors" json:"errors,omitempty"`
+		}	
 	*/
-	return nil, nil
+
+	// new transaction
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.PrewriteResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+	defer reader.Close()
+	txn := mvcc.NewMvccTxn(reader, req.StartVersion)
+
+	// attempt to lock all keys for THIS server
+	var keyErrors []*kvrpcpb.KeyError
+	var allKeys [][]byte
+	for _, m := range req.Mutations {
+		allKeys = append(allKeys, m.Key)
+	}
+	wg := server.Latches.AcquireLatches(allKeys)
+	if wg != nil {
+		keyErrors = append(keyErrors, &kvrpcpb.KeyError{
+				Retryable: "Latch acquisition failed",
+		})
+	}
+	defer server.Latches.ReleaseLatches(allKeys)
+
+	// If locking any key for mvcc fails, then TinyKV responds to the client that the transaction has failed.
+	for _, m := range req.Mutations {
+		// write conflict check
+		write, ts, err := txn.MostRecentWrite(m.Key)
+		if err != nil {
+			return nil, err
+		}
+		if write != nil && ts > req.StartVersion {
+			keyErrors = append(keyErrors, &kvrpcpb.KeyError{
+				Conflict: &kvrpcpb.WriteConflict{
+					StartTs:		req.StartVersion,
+					ConflictTs:		ts,
+					Key:			m.Key,
+					Primary:		req.PrimaryLock,
+				},
+			})
+			continue // next key
+		}
+
+		// if not out of date then try to get lock
+		lock, err := txn.GetLock(m.Key)
+		if err != nil { // not region error, not key error, not value, not not found
+			return nil, err
+		}
+		// if lock is older then cannot write
+		if lock != nil && lock.Ts < req.StartVersion { 
+			keyErrors = append(keyErrors, &kvrpcpb.KeyError{
+				Locked:	&kvrpcpb.LockInfo{
+					PrimaryLock:	lock.Primary,
+					LockVersion:	lock.Ts,
+					Key:			m.Key,
+					LockTtl:		lock.Ttl,
+				},
+			})
+			continue // next key
+		}
+
+		// if no one has lock and there is no conflicting write then stage put lock
+		var kind mvcc.WriteKind
+		switch m.Op {
+		case kvrpcpb.Op_Put:
+			kind = 	mvcc.WriteKindPut
+		case kvrpcpb.Op_Del:
+			kind = mvcc.WriteKindDelete
+		case kvrpcpb.Op_Rollback:
+			kind = mvcc.WriteKindRollback
+		}
+		lock = &mvcc.Lock{
+			Primary: req.PrimaryLock,
+			Ts:      req.StartVersion,
+			Ttl:     req.LockTtl,
+			Kind:    kind,
+		}
+		txn.PutLock(m.Key, lock)
+
+		switch m.Op {
+		case kvrpcpb.Op_Put:
+			txn.PutValue(m.Key, m.Value)
+		case kvrpcpb.Op_Del:
+			txn.DeleteValue(m.Key)
+		case kvrpcpb.Op_Rollback:
+		default:
+		}
+	}
+
+	// if there are errors don't write to storage
+	if len(keyErrors) > 0 {
+		return &kvrpcpb.PrewriteResponse{Errors: keyErrors}, nil
+	}
+
+	// if no errors stage writes
+	// func (rs *RaftStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify)
+	server.storage.Write(req.Context, txn.Writes())
+	
+	// Return errors if any
+	return &kvrpcpb.PrewriteResponse{}, nil
 }
 
 func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*kvrpcpb.CommitResponse, error) {

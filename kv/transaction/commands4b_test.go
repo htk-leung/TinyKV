@@ -10,7 +10,7 @@ import (
 )
 
 // TestGetValue4B getting a value works in the simple case.
-func TestGetValue4B(t *testing.T) {
+func TestGetValue4B(t *testing.T) { // 1 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -29,7 +29,7 @@ func TestGetValue4B(t *testing.T) {
 }
 
 // TestGetValueTs4B getting a value works with different timestamps.
-func TestGetValueTs4B(t *testing.T) {
+func TestGetValueTs4B(t *testing.T) { // 2 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -62,7 +62,7 @@ func TestGetValueTs4B(t *testing.T) {
 }
 
 // TestGetEmpty4B tests that get on an empty DB.
-func TestGetEmpty4B(t *testing.T) {
+func TestGetEmpty4B(t *testing.T) { // 3 PASS
 	builder := newBuilder(t)
 
 	var req kvrpcpb.GetRequest
@@ -76,7 +76,7 @@ func TestGetEmpty4B(t *testing.T) {
 }
 
 // TestGetNone4B tests that getting a missing key works.
-func TestGetNone4B(t *testing.T) {
+func TestGetNone4B(t *testing.T) { // 4 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -96,7 +96,7 @@ func TestGetNone4B(t *testing.T) {
 }
 
 // TestGetVersions4B tests we get the correct value when there are multiple versions.
-func TestGetVersions4B(t *testing.T) {
+func TestGetVersions4B(t *testing.T) { // 5 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -155,7 +155,7 @@ func TestGetVersions4B(t *testing.T) {
 }
 
 // TestGetDeleted4B tests we get the correct value when there are multiple versions, including a deletion.
-func TestGetDeleted4B(t *testing.T) {
+func TestGetDeleted4B(t *testing.T) { // 6 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -214,7 +214,7 @@ func TestGetDeleted4B(t *testing.T) {
 }
 
 // TestGetLocked4B tests getting a value when it is locked by another transaction.
-func TestGetLocked4B(t *testing.T) {
+func TestGetLocked4B(t *testing.T) { // 7 PASS
 	builder := newBuilder(t)
 	builder.init([]kv{
 		{cf: engine_util.CfDefault, key: []byte{99}, ts: 50, value: []byte{42}},
@@ -245,7 +245,7 @@ func TestGetLocked4B(t *testing.T) {
 }
 
 // TestEmptyPrewrite4B tests that a Prewrite with no mutations succeeds and changes nothing.
-func TestEmptyPrewrite4B(t *testing.T) {
+func TestEmptyPrewrite4B(t *testing.T) { // 8 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest()
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.PrewriteResponse)
@@ -256,7 +256,7 @@ func TestEmptyPrewrite4B(t *testing.T) {
 }
 
 // TestSinglePrewrite4B tests a prewrite with one write, it should succeed, we test all the expected values.
-func TestSinglePrewrite4B(t *testing.T) {
+func TestSinglePrewrite4B(t *testing.T) { // 9 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
 	cmd.LockTtl = 1000
@@ -272,8 +272,9 @@ func TestSinglePrewrite4B(t *testing.T) {
 }
 
 // TestPrewriteLocked4B tests that two prewrites to the same key causes a lock error.
-func TestPrewriteLocked4B(t *testing.T) {
+func TestPrewriteLocked4B(t *testing.T) { // 10
 	builder := newBuilder(t)
+	// func mutation(key byte, value []byte, op kvrpcpb.Op)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
 	cmd2 := builder.prewriteRequest(mutation(3, []byte{53}, kvrpcpb.Op_Put))
 	resps := builder.runRequests(cmd, cmd2)
@@ -290,7 +291,7 @@ func TestPrewriteLocked4B(t *testing.T) {
 }
 
 // TestPrewriteWritten4B tests an attempted prewrite with a write conflict.
-func TestPrewriteWritten4B(t *testing.T) {
+func TestPrewriteWritten4B(t *testing.T) { // 11 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
 	builder.init([]kv{
@@ -310,7 +311,7 @@ func TestPrewriteWritten4B(t *testing.T) {
 }
 
 // TestPrewriteWrittenNoConflict4B tests an attempted prewrite with a write already present, but no conflict.
-func TestPrewriteWrittenNoConflict4B(t *testing.T) {
+func TestPrewriteWrittenNoConflict4B(t *testing.T) { // 12 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
 	builder.init([]kv{
@@ -332,7 +333,7 @@ func TestPrewriteWrittenNoConflict4B(t *testing.T) {
 }
 
 // TestMultiplePrewrites4B tests that multiple prewrites to different keys succeeds.
-func TestMultiplePrewrites4B(t *testing.T) {
+func TestMultiplePrewrites4B(t *testing.T) { // 13 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put))
 	cmd2 := builder.prewriteRequest(mutation(4, []byte{53}, kvrpcpb.Op_Put))
@@ -353,7 +354,7 @@ func TestMultiplePrewrites4B(t *testing.T) {
 }
 
 // TestPrewriteOverwrite4B tests that two writes in the same prewrite succeed and we see the second write.
-func TestPrewriteOverwrite4B(t *testing.T) {
+func TestPrewriteOverwrite4B(t *testing.T) { // 14 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(mutation(3, []byte{42}, kvrpcpb.Op_Put), mutation(3, []byte{45}, kvrpcpb.Op_Put))
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.PrewriteResponse)
@@ -369,7 +370,7 @@ func TestPrewriteOverwrite4B(t *testing.T) {
 }
 
 // TestPrewriteMultiple4B tests that a prewrite with multiple mutations succeeds.
-func TestPrewriteMultiple4B(t *testing.T) {
+func TestPrewriteMultiple4B(t *testing.T) { // 15 PASS
 	builder := newBuilder(t)
 	cmd := builder.prewriteRequest(
 		mutation(3, []byte{42}, kvrpcpb.Op_Put),
@@ -391,7 +392,7 @@ func TestPrewriteMultiple4B(t *testing.T) {
 }
 
 // TestEmptyCommit4B tests a commit request with no keys to commit.
-func TestEmptyCommit4B(t *testing.T) {
+func TestEmptyCommit4B(t *testing.T) { // 16
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([][]byte{}...)
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.CommitResponse)
@@ -402,7 +403,7 @@ func TestEmptyCommit4B(t *testing.T) {
 }
 
 // TestSimpleCommit4B tests committing a single key.
-func TestSingleCommit4B(t *testing.T) {
+func TestSingleCommit4B(t *testing.T) { // 17
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -421,7 +422,7 @@ func TestSingleCommit4B(t *testing.T) {
 }
 
 // TestCommitOverwrite4B tests committing where there is already a write.
-func TestCommitOverwrite4B(t *testing.T) {
+func TestCommitOverwrite4B(t *testing.T) { // 18
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -446,7 +447,7 @@ func TestCommitOverwrite4B(t *testing.T) {
 
 // TestCommitMultipleKeys4B tests committing multiple keys in the same commit. Also puts some other data in the DB and test
 // that it is unchanged.
-func TestCommitMultipleKeys4B(t *testing.T) {
+func TestCommitMultipleKeys4B(t *testing.T) { // 19
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3}, []byte{12, 4, 0}, []byte{15})
 	builder.init([]kv{
@@ -496,7 +497,7 @@ func TestCommitMultipleKeys4B(t *testing.T) {
 }
 
 // TestRecommitKey4B tests committing the same key multiple times in one commit.
-func TestRecommitKey4B(t *testing.T) {
+func TestRecommitKey4B(t *testing.T) { // 20
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3}, []byte{3})
 	builder.init([]kv{
@@ -516,7 +517,7 @@ func TestRecommitKey4B(t *testing.T) {
 }
 
 // TestCommitConflictRollback4B tests committing a rolled back transaction.
-func TestCommitConflictRollback4B(t *testing.T) {
+func TestCommitConflictRollback4B(t *testing.T) { // 21
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -533,7 +534,7 @@ func TestCommitConflictRollback4B(t *testing.T) {
 }
 
 // TestCommitConflictRace4B tests committing where a key is pre-written by a different transaction.
-func TestCommitConflictRace4B(t *testing.T) {
+func TestCommitConflictRace4B(t *testing.T) { // 22
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -552,7 +553,7 @@ func TestCommitConflictRace4B(t *testing.T) {
 }
 
 // TestCommitConflictRepeat4B tests recommitting a transaction (i.e., the same commit request is received twice).
-func TestCommitConflictRepeat4B(t *testing.T) {
+func TestCommitConflictRepeat4B(t *testing.T) { // 23
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
@@ -572,7 +573,7 @@ func TestCommitConflictRepeat4B(t *testing.T) {
 
 // TestCommitMissingPrewrite4B tests committing a transaction which was not prewritten (i.e., a request was lost, but
 // the commit request was not).
-func TestCommitMissingPrewrite4B(t *testing.T) {
+func TestCommitMissingPrewrite4B(t *testing.T) { // 24
 	builder := newBuilder(t)
 	cmd := builder.commitRequest([]byte{3})
 	builder.init([]kv{
