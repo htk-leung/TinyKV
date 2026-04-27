@@ -270,7 +270,6 @@ func (server *Server) KvPrewrite(_ context.Context, req *kvrpcpb.PrewriteRequest
 	}
 
 	// if no errors stage writes
-	// func (rs *RaftStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify)
 	server.storage.Write(req.Context, txn.Writes())
 	
 	// Return errors if any
@@ -420,6 +419,28 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 
 func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	// Your Code Here (4C).
+	/*
+		type ScanResponse struct {
+			RegionError *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
+			// Other errors are recorded for each key in pairs.
+			Pairs                []*KvPair `protobuf:"bytes,2,rep,name=pairs" json:"pairs,omitempty"`
+		}
+		// Either a key/value pair or an error for a particular key.
+		type KvPair struct {
+			Error                *KeyError `protobuf:"bytes,1,opt,name=error" json:"error,omitempty"`
+			Key                  []byte    `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+			Value                []byte    `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+			XXX_NoUnkeyedLiteral struct{}  `json:"-"`
+			XXX_unrecognized     []byte    `json:"-"`
+			XXX_sizecache        int32     `json:"-"`
+		}
+	*/
+
+	// check limit, if 0 return empty response
+	// check if it is valid, if not return empty response
+	// find write, but for each check existence of default
+	// list value conditions - inserted and still there, inserted and deleted
+
 	return nil, nil
 }
 
@@ -430,7 +451,82 @@ func (server *Server) KvCheckTxnStatus(_ context.Context, req *kvrpcpb.CheckTxnS
 
 func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollbackRequest) (*kvrpcpb.BatchRollbackResponse, error) {
 	// Your Code Here (4C).
-	return nil, nil
+	/*
+		type BatchRollbackRequest struct {
+			Context              *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
+			StartVersion         uint64   `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+			Keys                 [][]byte `protobuf:"bytes,3,rep,name=keys" json:"keys,omitempty"`
+		}
+		type BatchRollbackResponse struct {
+			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
+			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
+			XXX_NoUnkeyedLiteral struct{}       `json:"-"`
+			XXX_unrecognized     []byte         `json:"-"`
+			XXX_sizecache        int32          `json:"-"`
+		}
+	*/
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.BatchRollbackResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+	defer reader.Close()
+	txn := mvcc.NewMvccTxn(reader, req.StartVersion)
+
+	// for each key
+	for _, key := range req.Keys {
+		// if already committed, do nothing, implies duplicate rollback req
+		write, _, err := txn.CurrentWrite(key)
+		if err != nil {
+			return nil, err
+		}
+		if write != nil {
+			if write.Kind != mvcc.WriteKindRollback {
+				return &kvrpcpb.BatchRollbackResponse{
+					Error: 	&kvrpcpb.KeyError{
+						Abort:	"KvRollback: trying to rollback key already committed",
+					},
+				}, nil
+			}
+			continue
+		}
+		// check missing prewrite : if missing insert write anyway but don't delete anything
+		lock, _ := txn.GetLock(key)
+		if lock != nil && lock.Ts == req.StartVersion {
+			txn.DeleteLock(key)
+		}
+		val, _ := txn.GetValuePrewritten(key)
+		if val != nil {
+			txn.DeleteValue(key)
+		}
+		
+		// enter Writer entry, use startversion as commitTS because nothing moved
+		txn.PutWrite(key, req.StartVersion, &mvcc.Write{
+			StartTS: 	req.StartVersion,
+			Kind:		mvcc.WriteKindRollback,
+		})
+	}
+	// write to storage func (rs *RaftStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify)
+	err = server.storage.Write(req.Context, txn.Writes())
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.BatchRollbackResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+
+	// returns *kvrpcpb.BatchRollbackResponse
+	return &kvrpcpb.BatchRollbackResponse{}, nil
 }
 
 func (server *Server) KvResolveLock(_ context.Context, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, error) {
