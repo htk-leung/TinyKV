@@ -136,7 +136,7 @@ func TestRollbackOtherTxn4C(t *testing.T) { // 7 PASS
 }
 
 // TestCheckTxnStatusTtlExpired4C checks that if there is a lock and its ttl has expired, then it is rolled back.
-func TestCheckTxnStatusTtlExpired4C(t *testing.T) { // 8
+func TestCheckTxnStatusTtlExpired4C(t *testing.T) { // 8 PASS
 	builder := newBuilder(t)
 	cmd := builder.checkTxnStatusRequest([]byte{3})
 	builder.init([]kv{
@@ -154,7 +154,7 @@ func TestCheckTxnStatusTtlExpired4C(t *testing.T) { // 8
 }
 
 // TestCheckTxnStatusTtlNotExpired4C checks that if there is a lock and its ttl has not expired, then nothing changes.
-func TestCheckTxnStatusTtlNotExpired4C(t *testing.T) { // 9
+func TestCheckTxnStatusTtlNotExpired4C(t *testing.T) { // 9 PASS
 	builder := newBuilder(t)
 	cmd := builder.checkTxnStatusRequest([]byte{3})
 	builder.init([]kv{
@@ -173,7 +173,7 @@ func TestCheckTxnStatusTtlNotExpired4C(t *testing.T) { // 9
 }
 
 // TestCheckTxnStatusRolledBack4C tests checking a key which has already been rolled back..
-func TestCheckTxnStatusRolledBack4C(t *testing.T) { // 10
+func TestCheckTxnStatusRolledBack4C(t *testing.T) { // 10 PASS
 	builder := newBuilder(t)
 	cmd := builder.checkTxnStatusRequest([]byte{3})
 	builder.init([]kv{
@@ -195,7 +195,7 @@ func TestCheckTxnStatusRolledBack4C(t *testing.T) { // 10
 }
 
 // TestCheckTxnStatusCommitted4C tests checking a key which has already been committed.
-func TestCheckTxnStatusCommitted4C(t *testing.T) { // 11
+func TestCheckTxnStatusCommitted4C(t *testing.T) { // 11 PASS
 	builder := newBuilder(t)
 	cmd := builder.checkTxnStatusRequest([]byte{3})
 	builder.init([]kv{
@@ -215,7 +215,7 @@ func TestCheckTxnStatusCommitted4C(t *testing.T) { // 11
 }
 
 // TestCheckTxnStatusNoLockNoWrite4C checks if there is no data for the key, then we get the right response.
-func TestCheckTxnStatusNoLockNoWrite4C(t *testing.T) { // 12
+func TestCheckTxnStatusNoLockNoWrite4C(t *testing.T) { // 12 PASS
 	builder := newBuilder(t)
 	cmd := builder.checkTxnStatusRequest([]byte{3})
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.CheckTxnStatusResponse)
@@ -229,7 +229,7 @@ func TestCheckTxnStatusNoLockNoWrite4C(t *testing.T) { // 12
 }
 
 // TestEmptyResolve4C tests a completely empty resolve request.
-func TestEmptyResolve4C(t *testing.T) { // 13
+func TestEmptyResolve4C(t *testing.T) { // 13 PASS
 	builder := newBuilder(t)
 	cmd := resolveRequest(0, 0)
 	resp := builder.runOneRequest(cmd).(*kvrpcpb.ResolveLockResponse)
@@ -240,7 +240,7 @@ func TestEmptyResolve4C(t *testing.T) { // 13
 }
 
 // TestResolveCommit4C should commit all keys in the specified transaction.
-func TestResolveCommit4C(t *testing.T) { // 14
+func TestResolveCommit4C(t *testing.T) { // 14 PASS
 	builder := newBuilder(t)
 	cmd := resolveRequest(100, 120)
 	builder.init([]kv{
@@ -267,7 +267,7 @@ func TestResolveCommit4C(t *testing.T) { // 14
 }
 
 // TestResolveRollback4C should rollback all keys in the specified transaction.
-func TestResolveRollback4C(t *testing.T) { // 15
+func TestResolveRollback4C(t *testing.T) { // 15 PASS
 	builder := newBuilder(t)
 	cmd := resolveRequest(100, 0)
 	builder.init([]kv{
@@ -292,7 +292,7 @@ func TestResolveRollback4C(t *testing.T) { // 15
 }
 
 // TestResolveCommitWritten4C tests a resolve where the matched keys are already committed or rolled back.
-func TestResolveCommitWritten4C(t *testing.T) { // 16
+func TestResolveCommitWritten4C(t *testing.T) { // 16 PASS
 	builder := newBuilder(t)
 	cmd := resolveRequest(100, 120)
 	builder.init([]kv{
@@ -319,7 +319,7 @@ func TestResolveCommitWritten4C(t *testing.T) { // 16
 }
 
 // TestResolveRollbackWritten4C tests a rollback resolve where data has already been committed or rolled back.
-func TestResolveRollbackWritten4C(t *testing.T) { // 17
+func TestResolveRollbackWritten4C(t *testing.T) { // 17 PASS
 	builder := newBuilder(t)
 	cmd := resolveRequest(100, 0)
 	builder.init([]kv{

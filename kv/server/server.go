@@ -14,6 +14,7 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/transaction/mvcc"
 	// "fmt"
+	// "bytes"
 	// "github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 )
 
@@ -295,12 +296,6 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 			// Must be greater than start_version.
 			CommitVersion        uint64   `protobuf:"varint,4,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
 		}
-		type Context struct {
-			RegionId             uint64              `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
-			RegionEpoch          *metapb.RegionEpoch `protobuf:"bytes,2,opt,name=region_epoch,json=regionEpoch" json:"region_epoch,omitempty"`
-			Peer                 *metapb.Peer        `protobuf:"bytes,3,opt,name=peer" json:"peer,omitempty"`
-			Term                 uint64              `protobuf:"varint,5,opt,name=term,proto3" json:"term,omitempty"`
-		}
 		type CommitResponse struct {
 			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
 			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
@@ -444,14 +439,151 @@ func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrp
 	return nil, nil
 }
 
-func (server *Server) KvCheckTxnStatus(_ context.Context, req *kvrpcpb.CheckTxnStatusRequest) (*kvrpcpb.CheckTxnStatusResponse, error) {
+func (server *Server) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.CheckTxnStatusRequest) (*kvrpcpb.CheckTxnStatusResponse, error) {
 	// Your Code Here (4C).
+	/*
+		KvCheckTxnStatus checks for timeouts, 
+		removes expired locks and returns the status of the lock.
+	*/
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.CheckTxnStatusResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+	defer reader.Close()
+	txn := mvcc.NewMvccTxn(reader, req.LockTs)
+
+	// get lock & write
+	lock, err := txn.GetLock(req.PrimaryKey)
+	if err != nil {
+		return nil, err
+	}
+	write, ts, err := txn.CurrentWrite(req.PrimaryKey)
+	if err != nil {
+		return nil, err
+	}
+
+	if write != nil {
+		// A. committed if write with kind!=WriteKindRollback
+		if write.Kind != mvcc.WriteKindRollback {
+			if lock != nil {
+				txn.DeleteLock(req.PrimaryKey)
+			}
+			return &kvrpcpb.CheckTxnStatusResponse{
+				CommitVersion: 	ts,
+				Action: 		kvrpcpb.Action_NoAction,
+			}, nil
+		} else {
+		// B. rolled back if write with kind=WriteKindRollback
+			if lock != nil {
+				txn.DeleteLock(req.PrimaryKey)
+			}
+			return &kvrpcpb.CheckTxnStatusResponse{
+				// rolled back: lock_ttl == 0 && ts == 0,
+				LockTtl: 		0,
+				CommitVersion: 	0,
+				Action: 		kvrpcpb.Action_NoAction,
+			}, nil
+		}
+	}
+
+	// no writes: process still running / blocked
+	if lock == nil {
+		txn.PutWrite(req.PrimaryKey, req.LockTs, &mvcc.Write{
+			StartTS: 			req.LockTs,
+			Kind:				mvcc.WriteKindRollback, 
+			// needs both fields even when there is no lock to rollback
+		})
+
+		err = server.storage.Write(req.Context, txn.Writes())
+		if err != nil {
+			// A. region error
+			if regionErr, ok := err.(*raft_storage.RegionError); ok {
+				return &kvrpcpb.CheckTxnStatusResponse{
+					RegionError: regionErr.RequestErr,
+				}, nil
+			}
+			// B. not region error, not key error, not value, not not found
+			return nil, err
+		}
+
+		return &kvrpcpb.CheckTxnStatusResponse{
+			Action: 		kvrpcpb.Action_LockNotExistRollback,
+		}, nil
+	}
+	// C. locked, lock still alive
+	if (req.CurrentTs - req.LockTs)/1000 < lock.Ttl { // mind the UNIT
+		return &kvrpcpb.CheckTxnStatusResponse{
+			LockTtl: 		lock.Ttl - (req.CurrentTs - req.LockTs),
+			Action: 		kvrpcpb.Action_NoAction,
+		}, nil
+	} else {
+	// D. lock expired, needs to roll back txn
+		// rollback all rows for this txn
+		klPair, err := mvcc.AllLocksForTxn(txn)
+		if err != nil {
+			return nil, err
+		}
+		var keys [][]byte
+		for _, p := range klPair {
+			keys = append(keys, p.Key)
+		}
+		resp, err := server.KvBatchRollback(ctx, &kvrpcpb.BatchRollbackRequest{
+			Context:			req.Context,
+			StartVersion:		req.LockTs,
+			Keys:				keys,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp.RegionError != nil {
+			return &kvrpcpb.CheckTxnStatusResponse{
+				RegionError:	resp.RegionError,
+			}, nil
+		}
+
+		// txn.DeleteLock(req.PrimaryKey)
+		// txn.DeleteValue(req.PrimaryKey)
+
+		// txn.PutWrite(req.PrimaryKey, lock.Ts, &mvcc.Write{
+		// 	StartTS: 	lock.Ts,
+		// 	Kind:		mvcc.WriteKindRollback,
+		// })
+
+		// err = server.storage.Write(req.Context, txn.Writes())
+		// if err != nil {
+		// 	// A. region error
+		// 	if regionErr, ok := err.(*raft_storage.RegionError); ok {
+		// 		return &kvrpcpb.CheckTxnStatusResponse{
+		// 			RegionError: regionErr.RequestErr,
+		// 		}, nil
+		// 	}
+		// 	// B. not region error, not key error, not value, not not found
+		// 	return nil, err
+		// }
+
+		return &kvrpcpb.CheckTxnStatusResponse{
+			LockTtl: 		0,
+			Action: 		kvrpcpb.Action_TTLExpireRollback,
+		}, nil
+	}
+
+	// no write, no lock
 	return nil, nil
 }
 
 func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollbackRequest) (*kvrpcpb.BatchRollbackResponse, error) {
 	// Your Code Here (4C).
 	/*
+		KvBatchRollback checks that a key is locked by the current transaction, 
+		and if so removes the lock, deletes any value and leaves a rollback indicator as a write.
+		
 		type BatchRollbackRequest struct {
 			Context              *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
 			StartVersion         uint64   `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
@@ -460,9 +592,6 @@ func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollb
 		type BatchRollbackResponse struct {
 			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
 			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
-			XXX_NoUnkeyedLiteral struct{}       `json:"-"`
-			XXX_unrecognized     []byte         `json:"-"`
-			XXX_sizecache        int32          `json:"-"`
 		}
 	*/
 	reader, err := server.storage.Reader(req.Context)
@@ -525,13 +654,114 @@ func (server *Server) KvBatchRollback(_ context.Context, req *kvrpcpb.BatchRollb
 		return nil, err
 	}
 
-	// returns *kvrpcpb.BatchRollbackResponse
 	return &kvrpcpb.BatchRollbackResponse{}, nil
 }
 
-func (server *Server) KvResolveLock(_ context.Context, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, error) {
+func (server *Server) KvResolveLock(ctx context.Context, req *kvrpcpb.ResolveLockRequest) (*kvrpcpb.ResolveLockResponse, error) {
 	// Your Code Here (4C).
-	return nil, nil
+
+	/*
+		type ResolveLockRequest struct {
+			Context              *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
+			StartVersion         uint64   `protobuf:"varint,2,opt,name=start_version,json=startVersion,proto3" json:"start_version,omitempty"`
+			CommitVersion        uint64   `protobuf:"varint,3,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
+		}
+		// Empty if the lock is resolved successfully.
+		type ResolveLockResponse struct {
+			RegionError          *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
+			Error                *KeyError      `protobuf:"bytes,2,opt,name=error" json:"error,omitempty"`
+		}
+	*/
+	// create txn
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		// A. region error
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.ResolveLockResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		// B. not region error, not key error, not value, not not found
+		return nil, err
+	}
+	defer reader.Close()
+
+	txn := mvcc.NewMvccTxn(reader, req.StartVersion)
+
+	// get all locks
+	klPairs, err := mvcc.AllLocksForTxn(txn)
+	if err != nil {
+		return nil, err
+	}
+
+	// A. no locks left, nothing to do
+	if len(klPairs) == 0 {
+		return &kvrpcpb.ResolveLockResponse{}, nil
+	}
+	
+	// collect all keys
+ 	var keys [][]byte
+    for _, pair := range klPairs {
+		keys = append(keys, pair.Key)
+    }
+
+	// count writes
+	var counter int
+	for _, key := range keys {
+		write, _, err := txn.CurrentWrite(key)
+		if err != nil { 
+			return nil, err 
+		}
+		if write == nil { 
+			continue 
+		}
+		counter++
+	}
+
+	// B. roll back when primary lock is still here, meaning it has not started committing
+	// or when no writes found
+	if counter == 0 && req.CommitVersion == 0 {
+		resp, err := server.KvBatchRollback(ctx, &kvrpcpb.BatchRollbackRequest{
+			Context:			req.Context,
+			StartVersion:		req.StartVersion,
+			Keys:				keys,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp.RegionError != nil {
+			return &kvrpcpb.ResolveLockResponse{
+				RegionError:	resp.RegionError,
+			}, nil
+		}
+	} 
+	// C. primary lock gone, but some keys have no Write, means there are values to clean up
+	// roll forward for each
+	if counter < len(keys) && req.CommitVersion != 0 {
+
+		resp, err := server.KvCommit(ctx, &kvrpcpb.CommitRequest{
+			Context:		req.Context,
+			StartVersion:	req.StartVersion,
+			Keys:			keys,
+			CommitVersion:	req.CommitVersion,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp.RegionError != nil {
+			return &kvrpcpb.ResolveLockResponse{
+				RegionError:	resp.RegionError,
+			}, nil
+		}
+		if resp.Error != nil {
+			return &kvrpcpb.ResolveLockResponse{
+				Error:	resp.Error,
+			}, nil
+		}
+	}
+
+	// return empty resp if the lock is resolved successfully
+	return &kvrpcpb.ResolveLockResponse{}, nil
 }
 
 // SQL push down commands.
