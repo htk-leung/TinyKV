@@ -96,6 +96,9 @@ func (server *Server) KvGet(_ context.Context, req *kvrpcpb.GetRequest) (*kvrpcp
 	defer reader.Close()
 	txn := mvcc.NewMvccTxn(reader, req.Version)
 
+	server.Latches.AcquireLatches([][]byte{req.Key})
+	defer server.Latches.ReleaseLatches([][]byte{req.Key})
+
 	// wait for latch
 	lock, err := txn.GetLock(req.Key)
 	if err != nil { // not region error, not key error, not value, not not found
@@ -415,28 +418,67 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	// Your Code Here (4C).
 	/*
+		type ScanRequest struct {
+			Context  *Context `protobuf:"bytes,1,opt,name=context" json:"context,omitempty"`
+			StartKey []byte   `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+			// The maximum number of values read.
+			Limit                uint32   `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+			Version              uint64   `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
+		}
 		type ScanResponse struct {
 			RegionError *errorpb.Error `protobuf:"bytes,1,opt,name=region_error,json=regionError" json:"region_error,omitempty"`
 			// Other errors are recorded for each key in pairs.
 			Pairs                []*KvPair `protobuf:"bytes,2,rep,name=pairs" json:"pairs,omitempty"`
 		}
-		// Either a key/value pair or an error for a particular key.
-		type KvPair struct {
-			Error                *KeyError `protobuf:"bytes,1,opt,name=error" json:"error,omitempty"`
-			Key                  []byte    `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
-			Value                []byte    `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
-			XXX_NoUnkeyedLiteral struct{}  `json:"-"`
-			XXX_unrecognized     []byte    `json:"-"`
-			XXX_sizecache        int32     `json:"-"`
-		}
 	*/
 
-	// check limit, if 0 return empty response
-	// check if it is valid, if not return empty response
-	// find write, but for each check existence of default
-	// list value conditions - inserted and still there, inserted and deleted
+	if req.Limit == 0 {
+		return &kvrpcpb.ScanResponse{}, nil
+	}
 
-	return nil, nil
+	// new txn
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		if regionErr, ok := err.(*raft_storage.RegionError); ok {
+			return &kvrpcpb.ScanResponse{
+				RegionError: regionErr.RequestErr,
+			}, nil
+		}
+		return nil, err
+	}
+	defer reader.Close()
+	txn := mvcc.NewMvccTxn(reader, req.Version)
+
+	var pairs []*kvrpcpb.KvPair
+	var counter uint32
+	scanner := mvcc.NewScanner(req.StartKey, txn)
+
+	for counter < req.Limit {
+		// call scanner.Next() to find most updated version
+		key, val, err := scanner.Next()
+		// save values to pairs
+		if key == nil && val == nil && err == nil {
+			break
+		}
+		if err != nil {
+			return nil, err
+		} 
+		if val == nil {
+			// counter++ // failed ones don't count
+			continue
+		}
+		// fmt.Printf("adding key: %x \t\tval: %x\n", key, val)
+		pairs = append(pairs, &kvrpcpb.KvPair{
+			Key:				key,
+			Value:				val,
+		})
+		counter++
+	}
+
+	scanner.Close()
+	return &kvrpcpb.ScanResponse{
+		Pairs:		pairs,
+	}, nil
 }
 
 func (server *Server) KvCheckTxnStatus(ctx context.Context, req *kvrpcpb.CheckTxnStatusRequest) (*kvrpcpb.CheckTxnStatusResponse, error) {

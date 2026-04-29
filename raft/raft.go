@@ -954,7 +954,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			return
 		}
 	}
-	fmt.Printf("in raft.handleAppendEntries: raftlog entries len = %d", len(r.RaftLog.entries))
+	// fmt.Printf("in raft.handleAppendEntries: raftlog entries len = %d", len(r.RaftLog.entries))
 
 	// if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if m.Commit > r.RaftLog.committed {

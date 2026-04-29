@@ -332,27 +332,28 @@ func (txn *MvccTxn) MostRecentWrite(key []byte) (*Write, uint64, error) {
 
 	// position iterator
 	it.Seek(EncodeKey(key, TsMax)) 
+	if it.Valid() {
+		item := it.Item()
 
-	item := it.Item()
+		// check key is still the same
+		userKey := DecodeUserKey(item.Key())
+		if !bytes.Equal(userKey, key) {
+			return nil, 0, nil
+		}
 
-	// check key is still the same
-	userKey := DecodeUserKey(item.Key())
-	if !bytes.Equal(userKey, key) {
-		return nil, 0, nil
-	}
+		// get value in item
+		valBytes, err := item.Value()
+		if err != nil {
+			return nil, 0, err
+		}
+		write, err := ParseWrite(valBytes)
+		if err != nil {
+			return nil, 0, err
+		}
 
-	// get value in item
-	valBytes, err := item.Value()
-	if err != nil {
-		return nil, 0, err
-	}
-	write, err := ParseWrite(valBytes)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	if write != nil {
-		return write, decodeTimestamp(item.Key()), nil
+		if write != nil {
+			return write, decodeTimestamp(item.Key()), nil
+		}
 	}
 	
 	return nil, 0, nil

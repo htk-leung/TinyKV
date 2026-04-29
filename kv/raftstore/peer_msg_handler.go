@@ -210,6 +210,12 @@ func (d *peerMsgHandler) HandleReq(
 					}})
 				}
 			}
+			// append resp : needed regardless of proposal entry
+			// responses = append(responses, &raft_cmdpb.Response{
+			// 	CmdType:	raft_cmdpb.CmdType_Snap,
+			// 	Snap:		&raft_cmdpb.SnapResponse{
+			// 		Region: d.Region(),
+			// }})
 		}
 	}
 	return responses

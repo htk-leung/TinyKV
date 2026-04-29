@@ -346,7 +346,7 @@ func TestResolveRollbackWritten4C(t *testing.T) { // 17 PASS
 }
 
 // TestScanEmpty4C tests a scan after the end of the DB.
-func TestScanEmpty4C(t *testing.T) { // 18
+func TestScanEmpty4C(t *testing.T) { // 18 PASS
 	builder := builderForScan(t)
 
 	cmd := builder.scanRequest([]byte{200}, 10000)
@@ -356,7 +356,7 @@ func TestScanEmpty4C(t *testing.T) { // 18
 }
 
 // TestScanLimitZero4C tests we get nothing if limit is 0.
-func TestScanLimitZero4C(t *testing.T) {
+func TestScanLimitZero4C(t *testing.T) { // 19 PASS
 	builder := builderForScan(t)
 
 	cmd := builder.scanRequest([]byte{3}, 0)
@@ -366,7 +366,7 @@ func TestScanLimitZero4C(t *testing.T) {
 }
 
 // TestScanAll4C start at the beginning of the DB and read all pairs, respecting the timestamp.
-func TestScanAll4C(t *testing.T) { // 19
+func TestScanAll4C(t *testing.T) { // 20 PASS
 	builder := builderForScan(t)
 
 	cmd := builder.scanRequest([]byte{0}, 10000)
@@ -381,7 +381,7 @@ func TestScanAll4C(t *testing.T) { // 19
 }
 
 // TestScanLimit4C tests that scan takes the limit into account.
-func TestScanLimit4C(t *testing.T) { // 20
+func TestScanLimit4C(t *testing.T) { // 21
 	builder := builderForScan(t)
 
 	cmd := builder.scanRequest([]byte{2}, 6)
@@ -396,7 +396,7 @@ func TestScanLimit4C(t *testing.T) { // 20
 }
 
 // TestScanDeleted4C scan over a value which is deleted then replaced.
-func TestScanDeleted4C(t *testing.T) { // 21
+func TestScanDeleted4C(t *testing.T) { // 22
 	builder := builderForScan(t)
 
 	req1 := builder.scanRequest([]byte{100}, 10000)
