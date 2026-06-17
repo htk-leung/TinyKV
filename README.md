@@ -68,6 +68,8 @@ Data is replicated to ensure fault-tolerance, and TinyKV implements the Raft con
 
 In addition to the logic outlined in the Ongaros paper[8], TinyKV also implements the KV server with support of data persistence to disk memory, compaction and snapshot capabilities. Part 2A implements the Raft algorithm, 2B persistence to memory, and 2C compaction and snapshotting.
 
+For Raft correctness reasoning details, refer to ```writeups/p2a.md```.
+
 #### 3.2.1 Raft Command Proposal
 
 The ```Write()``` and ```Reader()``` functions in RaftStorage serve as the connections between the MVCC and Raft layer. Each function calls ```SendRaftCommand()``` to send a request of type ```message.MsgTypeRaftCmd``` to leader's ```RaftWorker```, which is the receiver of gRPCs, and thus the starting point of Raft. Each time an RPC is received, leader ```RaftWorker``` first creates a new ```peerMsgHandler```. It then calls ```HandleMsg()``` to decide how to handle which type of message. Messages are then "unpackaged" by removing headers and passed into the Raft module by calling ```Propose()```. Such a process is illustrated in (*fig1*).
