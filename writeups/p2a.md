@@ -4,6 +4,10 @@ Project 2A implements the basic Raft algorithm. Algorithm is defined in the Onga
 
 ---
 
+### RequestVoteRPC
+
+---
+
 #### Q : What states to consider?
 
 - normal state with leader and followers
@@ -58,6 +62,16 @@ When the majority of nodes become candidates, due to the quorum-based policy one
 
 ---
 
+#### Q : When an election fails, what term does the candidate have when it reverts to a follower?
+
+It reverts to the current term, which is the term it was already in when it started that election. In Raft, a candidate increments its term when it becomes a candidate, and if the election fails it steps back to follower without rolling the term backward.
+
+This prevents “time travel” in Raft, when a server forgets that it has already advanced to a newer term. That way, stale leaders and stale candidates cannot keep acting as if an older election was still valid. 
+
+It does mean that some servers will remain useless until there is a higher term leader. Vote request is denied if its term is older than others, other have already voted for someone else, or its log is stale. In any case it should just wait. 
+
+---
+
 #### Q : What about term inflation?
 
 When a follower becomes a candidate and sends RequestVoteRPC with a low term, the crazy nodes reject it and include their current term in the response. The new node updates to that term and retries. 
@@ -69,6 +83,14 @@ If a minority of nodes become candidates because of network isolation from leade
 *Because elections can fail, local term should NOT be updated by RequestVoteRPCs except for candidates.
 
 ---
+
+#### Q : What happens when a RequestVoteRPC of higher term is received?
+
+When a candidate receives a higher term request vote RPC, it reverts to follower. (1) What term does it revert into? However, there is no clear leader yet, and the higher term election may fail. (2) Also, if it were to forward MsgPropose, it does not know whom to forward it to. (3) If it saves it locally, then forward to leader when there is a leader, then what prevents the client from sending another proposal because it hasn't heard back and thus duplicating the request? 
+
+1. it takes the term of the incoming RequestVoteRPC
+1. if there is no leader, then drop the message. Only forward when there is a leader
+1. it is a known issue called client retry deduplication, and it is explicitly out of scope for the core Raft protocol.
 
 #### Q : What happens in the interim between RequestVoteRPC and the first heartbeat?
 
@@ -118,3 +140,15 @@ No, because :
 1. leader only becomes follower and followers update term and leader when higher-term heartbeat received, meaning new leader has been elected. 
 1. after election succeeds the old leader may still receive proposals because client hasn't been updated yet. In this case forward proposal to new leader.
 Otherwise, a follower should not be receiving proposals
+
+
+---
+
+### AppendEntriesRPC
+
+---
+
+#### How to tell from where to start appending entries?
+
+Raft guarantees that each term only has 1 leader with an authoritative log, so entries within the same term must be identical. But if entries are not committed, they can be overwritten by incoming entries of a higher term. This means that we only need to check for term equivalence to tell if log entries match.
+
