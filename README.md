@@ -4,6 +4,24 @@
 
 This project follows the TinyKV course to build a key-value storage system with the Raft consensus algorithm and a multi-version concurrency control(MVCC) layer based on Percolator. It is built with goals to understand the interaction/boundaries between consensus protocols and database internal operations. This gives context to distributed systems and database concepts, such as validity, isolation levels.
 
+### 0. Outline
+
+<ol start="1">
+  <li>Motivation</li>
+  <li>Introduction</li>
+  <li>Implementation & correctness
+    <ol start="0">
+      <li><em>Architecture Overview</em></li>
+      <li><em>MVCC & Spanner Comparison</em></li>
+      <li><em>Raft</em></li>
+    </ol>
+  </li>
+  <li>Tests & Accuracy</li>
+  <li>Discussion & Conclusion</li>
+</ol>
+
+***Detailed Raft correctness reasoning in ```writeups/p2a.md```.*
+
 ### 1. Motivation
 
 A desire to understand distributed systems and database internals motivated a series of trials involving different study methods. Reading textbooks and papers[1][2][3] offered foundational knowledge but remained rather theoretical and did not allow for in-depth understanding of implementation details. Later the study was extended by reading the codebase of existing database systems, including Spanner, Calvin and FoundationDB to study timestamping methods. However, the extensiveness of the codebases made it hard to focus as each function and each step inspires many questions. Eventually, implementing a distributed database system emerged as the best option, as TinyKV provides a structured framework for focused study. These studies were carried out under guidance of Professor Aurojit Panda.
@@ -22,7 +40,7 @@ Code base is organized into 2 main directories, ```kv``` and ```raft```. ```kv``
 
 ```main.go``` is the starting point of each state machine, and is saved inside ```kv```. It sets up a ```gRPC``` server to listen for incoming requests from clients, and a Raft server that listens for RPCs for replication between state machines and state management. As such, each request from the client is first received by the gRPC server, then the corresponding database function is called, and replication through Raft executed.
 
-#### 3.1. MVCC
+#### 3.1. MVCC & Spanner Comparison
 
 TinyKV adapts the principles from Percolator to implement MVCC with snapshot isolation. Percolator[6] is a system built by Google principally to solve the problem of incremental processing. Snapshot isolation is an isolation level that prevents dirty reads, non-repeatable reads, phantom reads and write-write-conflict, but does not protect against write skew[7].
 
@@ -67,8 +85,6 @@ However, in the event that state machines crash, or are suspected to have crashe
 Data is replicated to ensure fault-tolerance, and TinyKV implements the Raft consensus algorithm. The Raft module is treated as a black box inside each DBMS state machine, where it must guarantee validity and agreement to ensure requests passed in remain unchanged and consistent between replications. Raft algorithm guarantees linearizability.
 
 In addition to the logic outlined in the Ongaros paper[8], TinyKV also implements the KV server with support of data persistence to disk memory, compaction and snapshot capabilities. Part 2A implements the Raft algorithm, 2B persistence to memory, and 2C compaction and snapshotting.
-
-For Raft correctness reasoning details, refer to ```writeups/p2a.md```.
 
 #### 3.2.1 Raft Command Proposal
 
