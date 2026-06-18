@@ -152,3 +152,9 @@ Otherwise, a follower should not be receiving proposals
 
 Raft guarantees that each term only has 1 leader with an authoritative log, so entries within the same term must be identical. But if entries are not committed, they can be overwritten by incoming entries of a higher term. This means that we only need to check for term equivalence to tell if log entries match.
 
+---
+
+#### Should you update Committed with heartbeat?
+
+Technically it is possible, but will need to check for log matches just like the function that handles AppendEntriesRPC. The TinyKV framework separates AppendEntriesRPC from Heartbeats, and the tests expect ```MessageType_MsgHeartbeat``` to not have last log entry index and term. Therefore the state variable should not be updated.
+

@@ -309,13 +309,11 @@ func (r *Raft) becomeLeader() {
 
 	// Propose noop entry
 	lastIndex := r.RaftLog.LastIndex()
-
-	entries := make([]*pb.Entry, 0)
-	entries = append(entries, &pb.Entry{
+	entries := []*pb.Entry{{
 		EntryType: pb.EntryType_EntryNormal,
 		Term:      r.Term,
 		Index:     lastIndex + 1,
-	})
+	}}
 
 	// Save entry locally and broadcast
 	r.AppendEntries(entries)
@@ -363,11 +361,11 @@ func (r *Raft) Step(m pb.Message) error {
 	case pb.MessageType_MsgAppend:
 		switch r.State {
 		case StateFollower:
-			r.fhandleAppendEntries(m)
+			r.fHandleAppendEntries(m)
 		case StateCandidate:
-			r.chandleAppendEntries(m)
+			r.cHandleAppendEntries(m)
 		case StateLeader:
-			r.lhandleAppendEntries(m)
+			r.lHandleAppendEntries(m)
 		}
 
 	// V 'MessageType_MsgAppendResponse' >> AppendEntriesRPC response
@@ -508,9 +506,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 	} else if m.Term > r.Term {
 		r.becomeFollower(m.Term, 0)
 	} else {
-		if r.State == StateCandidate {
-			r.becomeFollower(m.Term, 0)
-		} else if r.State == StateLeader {
+		if r.State != StateFollower {
 			r.msgs = append(r.msgs, pb.Message{
 				MsgType: pb.MessageType_MsgRequestVoteResponse,
 				To:      m.From,
@@ -525,6 +521,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 	// 2. If votedFor is not null and not equal to request candidateId : reject
 	// If voted for cand already send response again
 	if r.Vote == m.From {	
+		// fmt.Printf("Already voted for you : grant\n")
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgRequestVoteResponse,
 			To:      m.From,
@@ -534,6 +531,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		})
 		return
 	} else if r.Vote != 0 { // Already voted for someone else
+		// fmt.Printf("Already voted for someone else : reject\n")
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgRequestVoteResponse,
 			To:      m.From,
@@ -543,7 +541,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		})
 		return
 	}
-
+	// fmt.Printf("Not voted yet\n")
 	// 3. If candidate log is *at least as* up to date as the local log
 	lastEntryInd := r.RaftLog.LastIndex()
 	lastEntryTerm, err := r.RaftLog.Term(lastEntryInd)
@@ -738,13 +736,13 @@ func (r *Raft) handlePropose(m pb.Message) {
 	// Your Code Here (2A).
 
 	// If stale or there's nothing, drop
-	if m.Term < r.Term || m.Entries == nil {
+	// Don't check terms in handlePropose, it's added locally
+	if m.Entries == nil {
 		return
 	}
 
-	// EDIT: If not leader save and return
+	// If not leader save and return
 	if r.State != StateLeader { 
-		// panic("Non-leader receiving MsgPropose\n")
 		if r.Lead == 0 {
 			return
 		}
@@ -765,7 +763,7 @@ func (r *Raft) handlePropose(m pb.Message) {
 	r.bcastAppend()
 }
 
-func (r *Raft) fhandleAppendEntries(m pb.Message) {
+func (r *Raft) fHandleAppendEntries(m pb.Message) {
 	// Only restart when incoming message has higher term
 	// But always handles RPC
 	if m.Term > r.Term {
@@ -773,7 +771,7 @@ func (r *Raft) fhandleAppendEntries(m pb.Message) {
 	}
 	r.handleAppendEntries(m)
 }
-func (r *Raft) chandleAppendEntries(m pb.Message) {
+func (r *Raft) cHandleAppendEntries(m pb.Message) {
 	// Only handles AppendEntriesRPC when message term is at least as high as local term
 	// Means another candidate had won the election
 	if m.Term >= r.Term {
@@ -781,7 +779,7 @@ func (r *Raft) chandleAppendEntries(m pb.Message) {
 		r.handleAppendEntries(m)
 	}
 }
-func (r *Raft) lhandleAppendEntries(m pb.Message) {
+func (r *Raft) lHandleAppendEntries(m pb.Message) {
 	// Leader receiving AppendEntriesRPC of same term is byzantine error
 	// Only handles message if term is higher
 	if m.Term > r.Term {
@@ -793,11 +791,15 @@ func (r *Raft) lhandleAppendEntries(m pb.Message) {
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 
+	if r.Lead == 0 {
+		r.Lead = m.From
+	}
+
 	offset := r.RaftLog.entries[0].Index
-	prevLogIdx := m.Index - offset
+	prevLogPos := m.Index - offset
 
 	// 1. If log doesn’t contain an entry at prevLogIndex : reply false with local last index
-	if m.Index > r.RaftLog.LastIndex() {
+	if m.Index > r.RaftLog.LastIndex() || m.Index < offset {
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			To:      	m.From,
@@ -810,15 +812,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	// 2. If entry within bounds but term doesn't match prevLogTerm (§5.3)
-	// EDIT : if prevLogIdx < uint64(len(r.RaftLog.entries)) &&
-	if m.Index <= r.RaftLog.LastIndex() &&
-       m.LogTerm != r.RaftLog.entries[prevLogIdx].Term {
+	// EDIT : if prevLogPos < uint64(len(r.RaftLog.entries)) &&
+	var nextTimeSendThis uint64
+	if m.Index > 0 {
+		nextTimeSendThis = m.Index - 1
+	}
+	if m.LogTerm != r.RaftLog.entries[prevLogPos].Term {
         r.msgs = append(r.msgs, pb.Message{
             MsgType: 	pb.MessageType_MsgAppendResponse,
             To:      	m.From,
             From:    	r.id,
             Term:    	r.Term,
-            Index:   	m.Index - 1,
+            Index:   	nextTimeSendThis,
             Reject:  	true,
         })
         return
@@ -830,45 +835,47 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	})
 
 	// Append new entries
-	logEntriesAppended := false
-	if m.Index == r.RaftLog.LastIndex() {
-		// if prevlogindex == lastlogindex, just append the whole thing
-		for j := 0; j < len(m.Entries); j++ {
-			r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
-		}
-		logEntriesAppended = true
-	} else { 
-		// if prevlogindex < lastlogindex,
-		raftlogEntriesLen := uint64(len(r.RaftLog.entries))
+	// logEntriesAppended := false
+	if len(m.Entries) > 0 {
+		if m.Index == r.RaftLog.LastIndex() {
+			// if prevlogindex == lastlogindex, just append the whole thing
+			for j := 0; j < len(m.Entries); j++ {
+				r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
+			}
+			// logEntriesAppended = true
+		} else {
+			// if prevlogindex < lastlogindex,
+			raftlogEntriesLen := uint64(len(r.RaftLog.entries))
 
-		for i, mEntry := range m.Entries {
-			// Current log array position (NOT actual log index)
-			logIdx := mEntry.Index - offset
+			for i, mEntry := range m.Entries {
+				// Current log array position (NOT actual log index)
+				logIdx := mEntry.Index - offset
 
-			// Case when two arrays still overlap
-			if logIdx < raftlogEntriesLen {
-				// And something doesn't match, start appending from here and replace the rest
-				if r.RaftLog.entries[logIdx].Term != mEntry.Term {
-					// Truncate raftlog entries to just before current entry
-					r.RaftLog.entries = r.RaftLog.entries[ : logIdx]
-					// Update stabled if truncated
-					if r.RaftLog.stabled > r.RaftLog.entries[logIdx-1].Index {
-						r.RaftLog.stabled = r.RaftLog.entries[logIdx-1].Index
+				// Case when two arrays still overlap
+				if logIdx < raftlogEntriesLen {
+					// And something doesn't match, start appending from here and replace the rest
+					if r.RaftLog.entries[logIdx].Term != mEntry.Term {
+						// Truncate raftlog entries to just before current entry
+						r.RaftLog.entries = r.RaftLog.entries[ : logIdx]
+						// Update stabled if truncated
+						if r.RaftLog.stabled > r.RaftLog.entries[logIdx-1].Index {
+							r.RaftLog.stabled = r.RaftLog.entries[logIdx-1].Index
+						}
+						// Append entries
+						for j := i; j < len(m.Entries); j++ {
+							r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
+						}
+						// logEntriesAppended = true
+						break
 					}
-					// Append entries
+				} else if logIdx == raftlogEntriesLen { 
+					// New entry just at the end of existing entries, append all and done
 					for j := i; j < len(m.Entries); j++ {
 						r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
 					}
-					logEntriesAppended = true
+					// logEntriesAppended = true
 					break
 				}
-			} else if logIdx == raftlogEntriesLen { 
-				// New entry just at the end of existing entries, append all and done
-				for j := i; j < len(m.Entries); j++ {
-					r.RaftLog.entries = append(r.RaftLog.entries, *m.Entries[j])
-				}
-				logEntriesAppended = true
-				break
 			}
 		}
 	}
@@ -878,8 +885,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	if m.Commit > r.RaftLog.committed {
 		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 
-		if logEntriesAppended {
-			r.RaftLog.committed = min(m.Commit, m.Index)
+		// fmt.Printf("m.Index : %d   r.RaftLog.committed : %d\n", m.Index, r.RaftLog.committed)
+		if len(m.Entries) == 0 {
+			r.RaftLog.committed = min(r.RaftLog.committed, m.Index)
 		}
 	}
 
@@ -955,7 +963,7 @@ func (r *Raft) handleBeat(m pb.Message) {
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
 
-	// Same as above but Entries is always empty
+	// Entries is always empty
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: 	pb.MessageType_MsgHeartbeat,
 		To:      	to,
@@ -999,11 +1007,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Reset heartbeat timeout
 	r.electionElapsed = 0
 
-	// EDIT: updated var from Index to Commit
-	// Update committed and apply if m.Commit > r.RaftLog.committed 
-	if m.Commit > r.RaftLog.committed {
-		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
-	}
+	// EDIT: Don't update commit with heartbeat
 
 	// Respond with last log index
 	r.msgs = append(r.msgs, pb.Message{

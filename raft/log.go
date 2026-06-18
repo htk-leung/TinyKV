@@ -195,8 +195,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // INCLUDING UNSTABLE ONES
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-
 	return l.entries[0].Index + uint64(len(l.entries)) - 1
+}
+func (l *RaftLog) LastTerm() uint64 {
+	// Your Code Here (2A).
+	return l.entries[len(l.entries) - 1].Term
 }
 
 // Term return the term of the entry in the given index
